@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { User, Shield, Hospital, Camera, Download, Wifi, CheckCircle2, RefreshCw, Smartphone } from 'lucide-react';
+import { User, Camera, Download, Wifi, CheckCircle2, Smartphone } from 'lucide-react';
 import { usePWAInstall } from '../skills/pwa/usePWAInstall';
+import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
   name: string;
@@ -17,12 +18,13 @@ interface ProfileTabProps {
 
 export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdateProfile }) => {
   const [name, setName] = useState(userProfile.name);
-  const [profession, setProfession] = useState(userProfile.profession);
+  const [profession, setProfession] = useState(userProfile.profession || PROFESSION_OPTIONS[0].label);
   const [workplace, setWorkplace] = useState(userProfile.workplace);
   const [registrationNumber, setRegistrationNumber] = useState(userProfile.registrationNumber);
   const [avatarUrl, setAvatarUrl] = useState(userProfile.avatarUrl);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  const profConfig = getProfessionConfig(profession);
   const { isInstallable, install, isIOS } = usePWAInstall() as any;
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -38,7 +40,13 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    const updated = { name, profession, workplace, registrationNumber, avatarUrl };
+    const updated: UserProfile = {
+      name: name.trim(),
+      profession,
+      workplace: workplace.trim(),
+      registrationNumber: profConfig.hasCouncil ? registrationNumber.trim() : '',
+      avatarUrl
+    };
     onUpdateProfile(updated);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -49,7 +57,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-black text-slate-900 tracking-tight">Perfil do Profissional & Sistema</h1>
         <p className="text-xs text-slate-500">
-          Gerencie suas credenciais profissionais utilizadas em laudos, relatórios e intervenções.
+          Gerencie suas informações profissionais utilizadas em consultas, relatórios e intervenções.
         </p>
       </div>
 
@@ -91,7 +99,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700">Nome Completo</label>
+            <label className="block text-xs font-semibold text-slate-700">Nome Completo *</label>
             <input
               type="text"
               required
@@ -101,34 +109,53 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className={profConfig.hasCouncil ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
             <div>
-              <label className="block text-xs font-semibold text-slate-700">Profissão</label>
-              <input
-                type="text"
-                required
+              <label className="block text-xs font-semibold text-slate-700">Profissão / Função *</label>
+              <select
                 value={profession}
-                onChange={(e) => setProfession(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              />
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setProfession(val);
+                  if (!getProfessionConfig(val).hasCouncil) {
+                    setRegistrationNumber('');
+                  }
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm bg-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              >
+                {PROFESSION_OPTIONS.map((opt) => (
+                  <option key={opt.label} value={opt.label}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700">Registro Profissional (CRF/CRM)</label>
-              <input
-                type="text"
-                required
-                value={registrationNumber}
-                onChange={(e) => setRegistrationNumber(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              />
-            </div>
+
+            {profConfig.hasCouncil && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  {profConfig.councilLabel || 'Registro Profissional (CRF/CRM) *'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={profConfig.councilPlaceholder}
+                  value={registrationNumber}
+                  onChange={(e) => setRegistrationNumber(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+              </div>
+            )}
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700">Local de Trabalho / Hospital</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              {profConfig.workplaceLabel}
+            </label>
             <input
               type="text"
               required
+              placeholder={profConfig.workplacePlaceholder}
               value={workplace}
               onChange={(e) => setWorkplace(e.target.value)}
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"

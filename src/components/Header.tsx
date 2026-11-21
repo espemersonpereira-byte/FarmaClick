@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText } from 'lucide-react';
+import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
   name: string;
@@ -24,10 +25,13 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
   
   // Form state for profile editing
   const [editName, setEditName] = useState(userProfile.name);
-  const [editProfession, setEditProfession] = useState(userProfile.profession);
+  const [editProfession, setEditProfession] = useState(userProfile.profession || PROFESSION_OPTIONS[0].label);
   const [editWorkplace, setEditWorkplace] = useState(userProfile.workplace);
   const [editReg, setEditReg] = useState(userProfile.registrationNumber);
   const [editAvatar, setEditAvatar] = useState(userProfile.avatarUrl);
+
+  const currentProfConfig = getProfessionConfig(userProfile.profession);
+  const editProfConfig = getProfessionConfig(editProfession);
 
   React.useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -43,10 +47,10 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateProfile({
-      name: editName,
+      name: editName.trim(),
       profession: editProfession,
-      workplace: editWorkplace,
-      registrationNumber: editReg,
+      workplace: editWorkplace.trim(),
+      registrationNumber: editProfConfig.hasCouncil ? editReg.trim() : '',
       avatarUrl: editAvatar
     });
     setShowProfileModal(false);
@@ -71,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
           <button
             onClick={() => {
               setEditName(userProfile.name);
-              setEditProfession(userProfile.profession);
+              setEditProfession(userProfile.profession || PROFESSION_OPTIONS[0].label);
               setEditWorkplace(userProfile.workplace);
               setEditReg(userProfile.registrationNumber);
               setEditAvatar(userProfile.avatarUrl);
@@ -96,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
             <div className="flex items-center gap-2">
               <span className="font-bold tracking-tight text-white sm:text-lg">FarmaClick</span>
               <span className="rounded bg-sky-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-100 hidden sm:inline-block">
-                Hospitalar
+                {currentProfConfig.workplaceType === 'drogaria' ? 'Drogaria & Farmácia' : 'Hospitalar & Clínico'}
               </span>
               {!isOnline && (
                 <span className="flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
@@ -104,8 +108,11 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
                 </span>
               )}
             </div>
-            <p className="text-xs text-sky-100 truncate max-w-[200px] sm:max-w-xs">
-              {userProfile.name || 'Profissional'} • {userProfile.registrationNumber || 'CRF/CRM'}
+            <p className="text-xs text-sky-100 truncate max-w-[220px] sm:max-w-xs">
+              {userProfile.name || 'Profissional'} •{' '}
+              {currentProfConfig.hasCouncil && userProfile.registrationNumber
+                ? userProfile.registrationNumber
+                : userProfile.profession || userProfile.workplace}
             </p>
           </div>
         </div>
@@ -135,8 +142,8 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
             {showMenuDropdown && (
               <div className="absolute right-0 mt-2 w-56 rounded-xl bg-white py-2 shadow-xl ring-1 ring-black/5 z-50 text-slate-800">
                 <div className="px-4 py-2 border-b border-slate-100">
-                  <p className="text-xs font-semibold text-slate-900">{userProfile.name || 'Farmacêutico(a)'}</p>
-                  <p className="text-[11px] text-slate-500">{userProfile.workplace || 'Hospital Geral'}</p>
+                  <p className="text-xs font-semibold text-slate-900">{userProfile.name || 'Profissional'}</p>
+                  <p className="text-[11px] text-slate-500">{userProfile.workplace || userProfile.profession}</p>
                 </div>
                 <button
                   onClick={() => {
@@ -230,7 +237,7 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">Nome Completo</label>
+                <label className="block text-xs font-semibold text-slate-700">Nome Completo *</label>
                 <input
                   type="text"
                   required
@@ -240,34 +247,53 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={editProfConfig.hasCouncil ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700">Profissão</label>
-                  <input
-                    type="text"
-                    required
+                  <label className="block text-xs font-semibold text-slate-700">Profissão / Função *</label>
+                  <select
                     value={editProfession}
-                    onChange={(e) => setEditProfession(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                  />
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditProfession(val);
+                      if (!getProfessionConfig(val).hasCouncil) {
+                        setEditReg('');
+                      }
+                    }}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                  >
+                    {PROFESSION_OPTIONS.map((opt) => (
+                      <option key={opt.label} value={opt.label}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">Registro (CRF/CRM)</label>
-                  <input
-                    type="text"
-                    required
-                    value={editReg}
-                    onChange={(e) => setEditReg(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                  />
-                </div>
+
+                {editProfConfig.hasCouncil && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      {editProfConfig.councilLabel || 'Registro (CRF/CRM) *'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder={editProfConfig.councilPlaceholder}
+                      value={editReg}
+                      onChange={(e) => setEditReg(e.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                    />
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700">Local de Trabalho (Hospital / Setor)</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  {editProfConfig.workplaceLabel}
+                </label>
                 <input
                   type="text"
                   required
+                  placeholder={editProfConfig.workplacePlaceholder}
                   value={editWorkplace}
                   onChange={(e) => setEditWorkplace(e.target.value)}
                   className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"

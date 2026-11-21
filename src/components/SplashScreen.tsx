@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Pill, ShieldCheck, Sparkles, User, Camera, ArrowRight, Hospital } from 'lucide-react';
+import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
   name: string;
@@ -16,10 +17,12 @@ interface SplashScreenProps {
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const [step, setStep] = useState<'splash' | 'form'>('splash');
   const [name, setName] = useState('');
-  const [profession, setProfession] = useState('Farmacêutico(a) Clínico(a)');
+  const [profession, setProfession] = useState(PROFESSION_OPTIONS[0].label);
   const [workplace, setWorkplace] = useState('');
   const [registrationNumber, setRegistrationNumber] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
+
+  const profConfig = getProfessionConfig(profession);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -32,14 +35,24 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
     }
   };
 
+  const handleProfessionChange = (newProf: string) => {
+    setProfession(newProf);
+    const cfg = getProfessionConfig(newProf);
+    if (!cfg.hasCouncil) {
+      setRegistrationNumber('');
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !registrationNumber || !workplace) return;
+    if (!name.trim() || !workplace.trim()) return;
+    if (profConfig.hasCouncil && !registrationNumber.trim()) return;
+
     const profile: UserProfile = {
-      name,
+      name: name.trim(),
       profession,
-      workplace,
-      registrationNumber,
+      workplace: workplace.trim(),
+      registrationNumber: profConfig.hasCouncil ? registrationNumber.trim() : '',
       avatarUrl
     };
     localStorage.setItem('farmaclick_user', JSON.stringify(profile));
@@ -59,19 +72,19 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
 
           <h1 className="text-3xl font-black tracking-tight sm:text-4xl">FarmaClick</h1>
           <p className="mt-2 text-sm font-medium text-sky-100">
-            Farmácia Hospitalar e Apoio Clínico Baseado em Evidências
+            Farmácia Hospitalar, Drogaria e Apoio Clínico Baseado em Evidências
           </p>
 
           <div className="mt-8 grid grid-cols-2 gap-3 text-left w-full">
             <div className="rounded-xl bg-white/10 p-3 backdrop-blur-sm border border-white/10">
               <ShieldCheck className="h-5 w-5 text-sky-300 mb-1" />
-              <h2 className="text-xs font-bold">Base ANVISA</h2>
+              <h2 className="text-xs font-bold">Catálogo Completo</h2>
               <p className="text-[11px] text-sky-200">Medicamentos, bulas e tarjas</p>
             </div>
             <div className="rounded-xl bg-white/10 p-3 backdrop-blur-sm border border-white/10">
               <Sparkles className="h-5 w-5 text-amber-300 mb-1" />
-              <h2 className="text-xs font-bold">IA Clínica</h2>
-              <p className="text-[11px] text-sky-200">Interações e alergias</p>
+              <h2 className="text-xs font-bold">Análise de Receita</h2>
+              <p className="text-[11px] text-sky-200">Foto OCR, interações e alergias</p>
             </div>
           </div>
         </div>
@@ -85,7 +98,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
             <ArrowRight className="h-5 w-5" />
           </button>
           <p className="mt-3 text-center text-[11px] text-sky-200">
-            Uso restrito a profissionais de saúde e farmácia hospitalar
+            Para farmacêuticos, técnicos, auxiliares, balconistas, médicos e enfermagem
           </p>
         </div>
       </div>
@@ -100,7 +113,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
             <Hospital className="h-7 w-7" />
           </div>
           <h2 className="text-xl font-black text-slate-900">Cadastro do Profissional</h2>
-          <p className="text-xs text-slate-500 mt-1">Identifique-se para assinar intervenções e relatórios clínicos</p>
+          <p className="text-xs text-slate-500 mt-1">Identifique-se para acessar o sistema de consulta e análise de prescrições</p>
         </div>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -126,47 +139,54 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
             <input
               type="text"
               required
-              placeholder="Ex: Dr. Carlos Eduardo"
+              placeholder="Digite seu nome completo"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className={profConfig.hasCouncil ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
             <div>
-              <label className="block text-xs font-semibold text-slate-700">Profissão *</label>
+              <label className="block text-xs font-semibold text-slate-700">Profissão / Função *</label>
               <select
                 value={profession}
-                onChange={(e) => setProfession(e.target.value)}
+                onChange={(e) => handleProfessionChange(e.target.value)}
                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm bg-white focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
               >
-                <option value="Farmacêutico(a) Clínico(a)">Farmacêutico(a) Clínico(a)</option>
-                <option value="Farmacêutico(a) Hospitalar">Farmacêutico(a) Hospitalar</option>
-                <option value="Médico(a)">Médico(a)</option>
-                <option value="Enfermeiro(a) Clínico(a)">Enfermeiro(a) Clínico(a)</option>
-                <option value="Residente em Farmácia">Residente em Farmácia</option>
+                {PROFESSION_OPTIONS.map((opt) => (
+                  <option key={opt.label} value={opt.label}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700">Registro Profissional *</label>
-              <input
-                type="text"
-                required
-                placeholder="Ex: CRF-SP 48291"
-                value={registrationNumber}
-                onChange={(e) => setRegistrationNumber(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              />
-            </div>
+
+            {profConfig.hasCouncil && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  {profConfig.councilLabel || 'Registro Profissional *'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder={profConfig.councilPlaceholder || 'Ex: CRF-SP 48291'}
+                  value={registrationNumber}
+                  onChange={(e) => setRegistrationNumber(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+              </div>
+            )}
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700">Local de Trabalho / Hospital / Setor *</label>
+            <label className="block text-xs font-semibold text-slate-700">
+              {profConfig.workplaceLabel}
+            </label>
             <input
               type="text"
               required
-              placeholder="Ex: Hospital das Clínicas - UTI Adulto"
+              placeholder={profConfig.workplacePlaceholder}
               value={workplace}
               onChange={(e) => setWorkplace(e.target.value)}
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"

@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import Tesseract from 'tesseract.js';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
@@ -21,11 +22,255 @@ interface PrescriptionItemInput {
   route: string;
 }
 
+interface AnvisaCatalogEntry {
+  n: string;
+  p: string;
+  c: string;
+  k: string;
+  t: string;
+  ap?: string[];
+}
+
+// Load ANVISA catalog once at startup for OCR drug matching
+let anvisaCatalogCache: AnvisaCatalogEntry[] = [];
+try {
+  const catalogPath = path.resolve(__dirname, 'public/anvisa-catalog.json');
+  if (fs.existsSync(catalogPath)) {
+    anvisaCatalogCache = JSON.parse(fs.readFileSync(catalogPath, 'utf-8'));
+  }
+} catch (e) {
+  console.warn('Erro ao carregar catálogo ANVISA em memória:', e);
+}
+
+// Common hospital & clinical drug names to boost OCR matching accuracy
+const COMMON_HOSPITAL_DRUGS = [
+  'Dipirona', 'Paracetamol', 'Omeprazol', 'Pantoprazol', 'Esomeprazol', 'Ondansetrona', 'Metoclopramida',
+  'Bromoprida', 'Dimenidrinato', 'Enoxaparina', 'Heparina', 'Ceftriaxona', 'Cefepima', 'Cefalexina',
+  'Cefazolina', 'Cefuroxima', 'Meropenem', 'Ertapenem', 'Imipenem', 'Vancomicina', 'Teicoplanina',
+  'Piperacilina + Tazobactam', 'Tazocin', 'Amoxicilina + Clavulanato', 'Amoxicilina', 'Clavulin',
+  'Azitromicina', 'Claritromicina', 'Ciprofloxacino', 'Levofloxacino', 'Metronidazol', 'Clindamicina',
+  'Sulfametoxazol + Trimetoprima', 'Bactrim', 'Amicacina', 'Gentamicina', 'Polimixina B', 'Linezolida',
+  'Fluconazol', 'Anfotericina B', 'Aciclovir', 'Oseltamivir', 'Morfina', 'Tramadol', 'Fentanil',
+  'Codeína', 'Metadona', 'Oxicodona', 'Midazolam', 'Diazepam', 'Clonazepam', 'Lorazepam', 'Alprazolam',
+  'Haloperidol', 'Quetiapina', 'Risperidona', 'Olanzapina', 'Clorpromazina', 'Levomepromazina',
+  'Prometazina', 'Dexmedetomidina', 'Propofol', 'Cetamina', 'Etomidato', 'Rocurônio', 'Cisatracúrio',
+  'Succinilcolina', 'Fenitoína', 'Fenobarbital', 'Carbamazepina', 'Ácido Valproico', 'Valproato',
+  'Levetiracetam', 'Pregabalina', 'Gabapentina', 'Fluoxetina', 'Sertralina', 'Escitalopram', 'Citalopram',
+  'Venlafaxina', 'Duloxetina', 'Amitriptilina', 'Nortriptilina', 'Trazodona', 'Losartana', 'Valsartana',
+  'Enalapril', 'Captopril', 'Ramipril', 'Anlodipino', 'Nifedipino', 'Furosemida', 'Hidroclorotiazida',
+  'Espironolactona', 'Clortalidona', 'Indapamida', 'Propranolol', 'Metoprolol', 'Atenolol', 'Carvedilol',
+  'Bisoprolol', 'Nebivolol', 'Amiodarona', 'Digoxina', 'Hidralazina', 'Clonidina', 'Sinvastatina',
+  'Atorvastatina', 'Rosuvastatina', 'AAS', 'Ácido Acetilsalicílico', 'Clopidogrel', 'Ticagrelor',
+  'Varfarina', 'Rivaroxabana', 'Apixabana', 'Dabigatrana', 'Insulina NPH', 'Insulina Regular',
+  'Insulina Glargina', 'Metformina', 'Gliclazida', 'Glibenclamida', 'Dapagliflozina', 'Empagliflozina',
+  'Hidrocortisona', 'Dexametasona', 'Prednisona', 'Prednisolona', 'Metilprednisolona', 'Beclometasona',
+  'Budesonida', 'Salbutamol', 'Fenoterol', 'Ipratrópio', 'Atrovent', 'Berotec', 'Aerolin', 'Aminofilina',
+  'Acetilcisteína', 'Ambroxol', 'Loratadina', 'Desloratadina', 'Dexclorfeniramina', 'Fexofenadina',
+  'Cetoprofeno', 'Ibuprofeno', 'Diclofenaco', 'Nimesulida', 'Meloxicam', 'Celecoxibe', 'Cetorolaco',
+  'Escopolamina', 'Buscopan', 'Simeticona', 'Luftal', 'Lactulose', 'Bisacodil', 'Loperamida',
+  'Levotiroxina', 'Puran T4', 'Tiamina', 'Complexo B', 'Ácido Fólico', 'Sulfato Ferroso', 'Vitamina C',
+  'Cloreto de Sódio 0,9%', 'Soro Fisiológico 0,9%', 'Soro Glicosado 5%', 'Ringer Lactato',
+  'Glicose 50%', 'Glicose 25%', 'Cloreto de Potássio', 'Sulfato de Magnésio', 'Gluconato de Cálcio',
+  'Bicarbonato de Sódio', 'Noradrenalina', 'Norepinefrina', 'Adrenalina', 'Epinefrina', 'Dobutamina',
+  'Dopamina', 'Vasopressina', 'Nitroprussiato de Sódio', 'Nitroglicerina'
+];
+
+function normalizeText(str: string): string {
+  return (str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function inferScheduleFromFrequency(freq: string): string {
+  const f = freq.toLowerCase();
+  if (f.includes('4/4')) return '04:00 - 08:00 - 12:00 - 16:00 - 20:00 - 00:00';
+  if (f.includes('6/6') || f.includes('4x')) return '06:00 - 12:00 - 18:00 - 00:00';
+  if (f.includes('8/8') || f.includes('3x')) return '06:00 - 14:00 - 22:00';
+  if (f.includes('12/12') || f.includes('2x')) return '08:00 - 20:00';
+  if (f.includes('jejum')) return '06:00 (Em jejum)';
+  if (f.includes('noite') || f.includes('deitar')) return '22:00';
+  if (f.includes('acm') || f.includes('s/n') || f.includes('se necessario') || f.includes('se dor') || f.includes('se febre')) {
+    return 'Se necessário (ACM)';
+  }
+  return '08:00';
+}
+
+function inferRouteFromLine(line: string): string {
+  if (/\b(ev|iv|intravenos[ao]|endovenos[ao])\b/i.test(line)) return 'Intravenosa';
+  if (/\b(im|intramuscular)\b/i.test(line)) return 'Intramuscular';
+  if (/\b(sc|subcut[aâ]ne[ao])\b/i.test(line)) return 'Subcutânea';
+  if (/\b(inalat[oó]ri[ao]|nbz|nebuliza[cç][aã]o|jato|puff)\b/i.test(line)) return 'Inalatória';
+  if (/\b(t[oó]pic[ao]|pomada|creme|gel|col[ií]rio|oft[aá]lmic[ao])\b/i.test(line)) return 'Tópica';
+  if (/\b(sne|sng|sonda|enteral)\b/i.test(line)) return 'Sonda Enteral';
+  return 'Oral';
+}
+
+// Real OCR text parser that extracts patient name, bed, ward, age, prescriber and prescribed items from raw OCR lines
+function parsePrescriptionFromOcrText(rawText: string) {
+  const lines = (rawText || '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length > 1);
+
+  let patientName = '';
+  let patientBed = '';
+  let patientWard = '';
+  let patientAge = '';
+  let prescriber = '';
+
+  for (const line of lines) {
+    // Extract Patient Name
+    if (!patientName) {
+      const nameMatch = line.match(/(?:paciente|nome(?:\s+do\s+paciente)?|pac\.?|cliente)\s*[:.\-]\s*([A-Za-zÀ-ÿ\s]{3,60})/i);
+      if (nameMatch && nameMatch[1]) {
+        const cleanedName = nameMatch[1]
+          .split(/\b(?:idade|dn|nasc|leito|quarto|setor|unidade|prontu[aá]rio|registro|atendimento|sexo|peso|data|cpf|sus|mae|mãe)\b/i)[0]
+          .trim();
+        if (cleanedName.length >= 3) {
+          patientName = cleanedName;
+        }
+      }
+    }
+
+    // Extract Bed (Leito / Quarto / Box)
+    if (!patientBed) {
+      const bedMatch = line.match(/\b(?:leito|lto\.?|quarto|box|acomoda[cç][aã]o)\s*[:.\-#]?\s*([A-Za-z0-9\-/]{1,15})/i);
+      if (bedMatch && bedMatch[1]) {
+        patientBed = bedMatch[1].trim();
+      }
+    }
+
+    // Extract Ward / Location (Setor / Unidade / Ala / Clínica / Enfermaria / UTI / Pronto Socorro)
+    if (!patientWard) {
+      const wardLabelMatch = line.match(/\b(?:setor|unidade|ala|cl[ií]nica|posto|local|interna[cç][aã]o|origem)\s*[:.\-]\s*([A-Za-zÀ-ÿ0-9\s\-/]{2,40})/i);
+      if (wardLabelMatch && wardLabelMatch[1]) {
+        const cleanedWard = wardLabelMatch[1]
+          .split(/\b(?:leito|quarto|box|prontu[aá]rio|atendimento|data|m[eé]dico|idade)\b/i)[0]
+          .trim();
+        if (cleanedWard.length >= 2) {
+          patientWard = cleanedWard;
+        }
+      } else {
+        const directWardMatch = line.match(/\b((?:UTI|CTI|Enfermaria|Pronto\s*Socorro|Emerg[eê]ncia|Cl[ií]nica\s+M[eé]dica|Cl[ií]nica\s+Cir[uú]rgica|Pediatria|Maternidade|Observa[cç][aã]o|Bloco\s+[A-Z0-9]+|Posto\s+[A-Z0-9]+)(?:\s+[A-Za-zÀ-ÿ0-9\-]+){0,2})\b/i);
+        if (directWardMatch && directWardMatch[1]) {
+          patientWard = directWardMatch[1].trim();
+        }
+      }
+    }
+
+    // Extract Age
+    if (!patientAge) {
+      const ageMatch =
+        line.match(/\b(?:idade)\s*[:.\-]?\s*(\d{1,3}\s*(?:anos?|a\.?|meses|m)?)/i) ||
+        line.match(/\b(\d{1,3})\s*anos\b/i);
+      if (ageMatch && ageMatch[1]) {
+        patientAge = ageMatch[1].trim();
+      }
+    }
+
+    // Extract Prescriber / CRM
+    if (!prescriber) {
+      const docMatch =
+        line.match(/\b((?:Dr\.?|Dra\.?|M[eé]dico(?:\(a\))?|Prescritor)\s*[:.\-]?\s*[A-Za-zÀ-ÿ.\s]{3,45}(?:\s*[-/]?\s*CRM[:\s\-A-Z]*\d+)?)/i) ||
+        line.match(/\b(CRM[\s:\-/A-Z]*\d{3,10})\b/i);
+      if (docMatch && docMatch[1]) {
+        prescriber = docMatch[1].trim();
+      }
+    }
+  }
+
+  // Extract Medications from OCR lines
+  const extractedItems: PrescriptionItemInput[] = [];
+  const seenDrugs = new Set<string>();
+
+  for (const line of lines) {
+    // Skip header lines that clearly only contain patient metadata
+    if (/^(?:paciente|nome do paciente|hospital|santa casa|prefeitura|secretaria|data de emiss[aã]o|prontu[aá]rio|assinatura|carimbo)\s*[:]/i.test(line)) {
+      continue;
+    }
+
+    const normLine = normalizeText(line);
+    if (normLine.length < 4) continue;
+
+    let matchedDrugName = '';
+
+    // 1. Check against Common Hospital Drugs first (most frequent in hospital prescriptions)
+    for (const drug of COMMON_HOSPITAL_DRUGS) {
+      const normDrug = normalizeText(drug);
+      if (normDrug.length >= 3 && normLine.includes(normDrug)) {
+        matchedDrugName = drug;
+        break;
+      }
+    }
+
+    // 2. If not matched, check against the 7,090 official ANVISA catalog entries
+    if (!matchedDrugName && anvisaCatalogCache.length > 0) {
+      for (const entry of anvisaCatalogCache) {
+        const nNorm = normalizeText(entry.n);
+        const pNorm = normalizeText(entry.p);
+        if (nNorm.length >= 5 && normLine.includes(nNorm)) {
+          matchedDrugName = entry.n;
+          break;
+        }
+        if (pNorm.length >= 5 && normLine.includes(pNorm)) {
+          matchedDrugName = entry.p;
+          break;
+        }
+      }
+    }
+
+    // 3. Also detect numbered/bulleted prescription lines that have explicit dosage units (e.g. "1) MedName 500mg VO 8/8h")
+    if (!matchedDrugName) {
+      const numberedDrugMatch = line.match(/^(?:\d+[\s.)\-]+|[-•*]\s*)([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s+/]{2,35}?)\s+(\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|ml|ui|%|gotas|cp|comp|amp|fr)\b.*)/i);
+      if (numberedDrugMatch && numberedDrugMatch[1]) {
+        const candidate = numberedDrugMatch[1].trim();
+        if (!/^(?:paciente|leito|setor|idade|peso|altura|data|dieta|cabeceira|sinais|glicemia|curativo|oxigenio|monitorizar)/i.test(candidate)) {
+          matchedDrugName = candidate;
+        }
+      }
+    }
+
+    if (matchedDrugName) {
+      const key = normalizeText(matchedDrugName);
+      if (seenDrugs.has(key)) continue;
+      seenDrugs.add(key);
+
+      const doseMatch = line.match(/\b(\d+(?:[.,]\d+)?\s*(?:mg\/ml|mg\/g|mg|g|mcg|ml|ui|%|mEq)(?:\s*\/\s*\d+(?:[.,]\d+)?\s*(?:mg|ml))?)\b/i);
+      const freqMatch = line.match(/\b(\d{1,2}\/\d{1,2}\s*h(?:oras)?|\d+\s*x\s*(?:ao\s*dia|\/dia|dia)|de\s+\d+\s+em\s+\d+\s*h(?:oras)?|1x\/dia|2x\/dia|3x\/dia|4x\/dia|jejum|[aà]\s*noite|acm|s\/?n|se\s+necess[aá]rio|se\s+dor|se\s+febre|cont[ií]nuo)\b/i);
+      const route = inferRouteFromLine(line);
+      const dose = doseMatch ? doseMatch[1].trim() : 'Conforme prescrição';
+      const frequency = freqMatch ? freqMatch[1].trim() : 'Conforme prescrição';
+      const schedule = inferScheduleFromFrequency(frequency + ' ' + line);
+
+      extractedItems.push({
+        id: `ocr-${Date.now()}-${extractedItems.length}`,
+        drugName: matchedDrugName,
+        dose,
+        posology: line,
+        frequency,
+        schedule,
+        route
+      });
+    }
+  }
+
+  return {
+    patientName,
+    patientBed,
+    patientWard,
+    patientAge,
+    prescriber,
+    extractedItems
+  };
+}
+
 // Comprehensive deterministic clinical engine (always runs to guarantee 100% identification of all added drugs, interactions, allergies & ANVISA rules)
 function buildLocalClinicalAnalysis(
   prescriptionItems: PrescriptionItemInput[],
   patientAllergies: string[] = [],
-  patientInfo: { patientName?: string; patientAge?: string; patientClCr?: string } = {}
+  patientInfo: { patientName?: string; patientBed?: string; patientWard?: string; patientAge?: string; patientClCr?: string } = {}
 ) {
   const items = Array.isArray(prescriptionItems) ? prescriptionItems : [];
   const allergies = Array.isArray(patientAllergies) ? patientAllergies : [];
@@ -317,8 +562,8 @@ function buildLocalClinicalAnalysis(
 
 async function startServer() {
   const app = express();
-  // Increase JSON limit to 15MB to support prescription photo uploads
-  app.use(express.json({ limit: '15mb' }));
+  // Increase JSON limit to 20MB to support high-res prescription photo uploads
+  app.use(express.json({ limit: '20mb' }));
 
   // Initialize Gemini Client (Server-side only)
   const ai = new GoogleGenAI({
@@ -330,6 +575,36 @@ async function startServer() {
     },
   });
 
+  // Helper that cascades across available free-tier models if one model hits its daily 429 limit
+  async function generateWithModelFallback(contents: any, systemInstruction: string) {
+    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
+    let lastError: any = null;
+
+    for (const modelName of modelsToTry) {
+      try {
+        const config: any = {
+          responseMimeType: 'application/json',
+          systemInstruction,
+        };
+        if (modelName === 'gemini-4-hydrogen') {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents,
+          config,
+        });
+        if (response && response.text) {
+          return response.text;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Modelo ${modelName} indisponível (${err?.status || err?.message}), tentando próximo modelo...`);
+      }
+    }
+    throw lastError || new Error('Todos os modelos Gemini atingiram limite de cota.');
+  }
+
   // API endpoint for ANVISA active database status
   app.get('/api/anvisa/status', (_req, res) => {
     try {
@@ -340,7 +615,7 @@ async function startServer() {
           source: 'https://dados.anvisa.gov.br/dados/DADOS_ABERTOS_MEDICAMENTOS.csv',
           status: 'Sincronizado',
           totalActivePresentations: 85497,
-          uniqueActiveMedications: 8619,
+          uniqueActiveMedications: anvisaCatalogCache.length || 7090,
           lastSyncBytes: stat.size
         });
       }
@@ -373,7 +648,9 @@ async function startServer() {
 Como Farmacêutico Clínico Hospitalar Sênior no Brasil, analise TODOS os ${prescriptionItems.length} medicamentos da prescrição abaixo com base nas diretrizes da ANVISA (Portaria 344/98, RDC 20/2011), Micromedex e Lexicomp:
 
 PACIENTE:
-- Nome/Leito: ${patientInfo?.patientName || 'Não informado'}
+- Nome: ${patientInfo?.patientName || 'Não informado'}
+- Leito: ${patientInfo?.patientBed || 'Não informado'}
+- Setor/Unidade: ${patientInfo?.patientWard || 'Não informado'}
 - Idade: ${patientInfo?.patientAge || 'Não informada'}
 - Função Renal (ClCr): ${patientInfo?.patientClCr || 'Não informada'}
 - Alergias conhecidas: ${patientAllergies && patientAllergies.length > 0 ? patientAllergies.join(', ') : 'Nenhuma relatada'}
@@ -390,21 +667,14 @@ Retorne estritamente um objeto JSON válido com:
 6. "therapeuticAdjustments": Array de strings com recomendações posológicas e de aprazamento para cada item da prescrição.
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          systemInstruction: 'Você é um especialista em farmácia clínica hospitalar. Avalie obrigatoriamente todos os medicamentos enviados na lista e retorne apenas JSON válido.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
+      const textOutput = await generateWithModelFallback(
+        prompt,
+        'Você é um especialista em farmácia clínica hospitalar. Avalie obrigatoriamente todos os medicamentos enviados na lista e retorne apenas JSON válido.'
+      );
 
-      const textOutput = response.text || '{}';
       const cleanedJson = textOutput.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsedData = JSON.parse(cleanedJson);
 
-      // Merge AI result with deterministic local checks so no added drug, allergy, or interaction is ever missed!
       const mergedInteractions = Array.isArray(parsedData.interactions) && parsedData.interactions.length > 0
         ? parsedData.interactions
         : localResult.interactions;
@@ -439,37 +709,38 @@ Retorne estritamente um objeto JSON válido com:
 
   // API endpoint for Prescription Photo OCR & Clinical Analysis
   app.post('/api/analyze-prescription-photo', async (req, res) => {
-    const { imageBase64, mimeType, patientAllergies, patientInfo } = req.body;
+    const { imageBase64, mimeType, patientAllergies, rawOcrText } = req.body;
 
-    if (!imageBase64) {
+    if (!imageBase64 && !rawOcrText) {
       return res.status(400).json({ error: 'Imagem da prescrição não enviada.' });
     }
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    const cleanBase64 = (imageBase64 || '').replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
 
-    try {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error('Chave Gemini ausente');
-      }
-
-      const prompt = `
-Analise a imagem desta prescrição/receita médica hospitalar ou ambulatorial.
-Extraia com máxima precisão:
-1. O nome do paciente (se visível na receita, caso contrário retorne "Paciente Identificado na Receita").
-2. A idade do paciente (se visível, caso contrário "").
-3. O nome do médico prescritor e registro CRM (se visível).
-4. TODOS os medicamentos prescritos na imagem, incluindo para cada medicamento:
-   - "drugName": Nome do medicamento / princípio ativo
-   - "dose": Concentração ou dose (ex: "500mg", "875/125mg", "10mg/mL")
-   - "posology": Instrução posológica completa (ex: "1 comprimido de 8 em 8 horas por 7 dias")
-   - "frequency": Frequência (ex: "8/8h", "12/12h", "1x ao dia")
-   - "schedule": Sugestão de aprazamento hospitalar (ex: "06:00 - 14:00 - 22:00", "08:00 - 20:00", "22:00")
-   - "route": Via de administração (ex: "Oral", "Intravenosa", "Intramuscular", "Subcutânea")
+    const prompt = `
+Analise cuidadosamente a imagem desta prescrição/receita médica hospitalar ou ambulatorial.
+Leia TODO o texto impresso ou manuscrito visível na foto e extraia com máxima fidelidade apenas o que está escrito na imagem (NÃO invente nomes nem medicamentos que não estejam na foto):
+1. "patientName": Nome completo do paciente escrito na prescrição/receita (se não estiver visível na foto, retorne "").
+2. "patientBed": Número ou identificação do Leito / Quarto / Box escrito na prescrição (ex: "302", "Leito 12-A", "Box 04"; se não constar na foto, retorne "").
+3. "patientWard": Setor, Unidade, Ala, Clínica, Enfermaria, UTI ou local onde o paciente está internado/atendido escrito na prescrição (ex: "UTI Adulto", "Enfermaria Clínica Médica", "Pronto Socorro"; se não constar na foto, retorne "").
+4. "patientAge": Idade do paciente escrita na prescrição (ex: "64 anos"; se não constar, retorne "").
+5. "patientClCr": Função renal / ClCr / Creatinina se constar na prescrição (caso contrário, retorne "").
+6. "prescriber": Nome do médico prescritor e CRM se visível na receita (caso contrário, retorne "").
+7. "extractedItems": Lista com TODOS os medicamentos prescritos na imagem, contendo para cada medicamento:
+   - "drugName": Nome exato do medicamento / princípio ativo lido na foto
+   - "dose": Concentração ou dose lida na foto (ex: "500mg", "1g", "40mg", "10mg/mL")
+   - "posology": Instrução posológica completa lida na foto (ex: "1 comprimido VO de 8/8h", "1 frasco EV lento de 12/12h")
+   - "frequency": Frequência lida na foto (ex: "8/8h", "12/12h", "6/6h", "1x ao dia", "ACM")
+   - "schedule": Horários aprazados na prescrição ou sugestão de aprazamento hospitalar correspondente (ex: "06:00 - 14:00 - 22:00", "08:00 - 20:00")
+   - "route": Via de administração lida na foto (ex: "Oral", "Intravenosa", "Intramuscular", "Subcutânea", "Inalatória", "Sonda Enteral")
 
 Retorne estritamente um objeto JSON válido com o formato:
 {
   "patientName": "string",
+  "patientBed": "string",
+  "patientWard": "string",
   "patientAge": "string",
+  "patientClCr": "string",
   "prescriber": "string",
   "extractedItems": [
     {
@@ -484,9 +755,13 @@ Retorne estritamente um objeto JSON válido com o formato:
 }
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: {
+    try {
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error('Chave Gemini ausente');
+      }
+
+      const textOutput = await generateWithModelFallback(
+        {
           parts: [
             {
               inlineData: {
@@ -497,119 +772,86 @@ Retorne estritamente um objeto JSON válido com o formato:
             { text: prompt },
           ],
         },
-        config: {
-          responseMimeType: 'application/json',
-          systemInstruction: 'Você é um sistema especialista de OCR farmacêutico hospitalar que lê fotos de receitas médicas impressas ou manuscritas e extrai paciente, medicamentos, doses e posologias em JSON.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
+        'Você é um sistema especialista de OCR farmacêutico hospitalar. Leia exatamente o nome do paciente, leito, setor/local de internação, idade, médico e todos os medicamentos, doses, vias e posologias presentes na imagem da prescrição médica. Nunca invente dados que não estão na imagem. Retorne apenas JSON válido.'
+      );
 
-      const textOutput = response.text || '{}';
       const cleanedJson = textOutput.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanedJson);
 
-      const extractedItems: PrescriptionItemInput[] = Array.isArray(parsed.extractedItems) && parsed.extractedItems.length > 0
-        ? parsed.extractedItems.map((it: any, idx: number) => ({
-            id: `photo-${Date.now()}-${idx}`,
-            drugName: it.drugName || 'Medicamento Identificado',
-            dose: it.dose || 'Dose padrão',
-            posology: it.posology || 'Conforme prescrição médica',
-            frequency: it.frequency || '12/12h',
-            schedule: it.schedule || '08:00 - 20:00',
-            route: it.route || 'Oral'
-          }))
-        : [
-            {
-              id: `photo-${Date.now()}-1`,
-              drugName: 'Amoxicilina + Clavulanato de Potássio',
-              dose: '875mg + 125mg',
-              posology: '1 comprimido VO de 12 em 12 horas por 7 dias',
-              frequency: '12/12h',
-              schedule: '08:00 - 20:00',
-              route: 'Oral'
-            },
-            {
-              id: `photo-${Date.now()}-2`,
-              drugName: 'Cetoprofeno',
-              dose: '100mg',
-              posology: '1 comprimido VO de 12 em 12 horas após as refeições',
-              frequency: '12/12h',
-              schedule: '08:00 - 20:00',
-              route: 'Oral'
-            },
-            {
-              id: `photo-${Date.now()}-3`,
-              drugName: 'Dipirona Monoidratada',
-              dose: '1g',
-              posology: '1 comprimido VO de 6 em 6 horas se dor ou febre',
-              frequency: '6/6h',
-              schedule: '06:00 - 12:00 - 18:00 - 00:00',
-              route: 'Oral'
-            }
-          ];
+      const extractedItems: PrescriptionItemInput[] = Array.isArray(parsed.extractedItems)
+        ? parsed.extractedItems
+            .filter((it: any) => it && typeof it.drugName === 'string' && it.drugName.trim().length > 0)
+            .map((it: any, idx: number) => ({
+              id: `photo-${Date.now()}-${idx}`,
+              drugName: it.drugName.trim(),
+              dose: (it.dose || 'Conforme prescrição').trim(),
+              posology: (it.posology || 'Conforme prescrição médica').trim(),
+              frequency: (it.frequency || 'Conforme prescrição').trim(),
+              schedule: (it.schedule || inferScheduleFromFrequency(it.frequency || it.posology || '')).trim(),
+              route: (it.route || inferRouteFromLine(it.posology || '')).trim()
+            }))
+        : [];
 
-      const updatedPatientInfo = {
-        patientName: parsed.patientName || patientInfo?.patientName || 'Paciente da Receita Escaneada',
-        patientAge: parsed.patientAge || patientInfo?.patientAge || '54',
-        patientClCr: patientInfo?.patientClCr || '65 mL/min',
+      const extractedPatientInfo = {
+        patientName: (parsed.patientName || '').trim(),
+        patientBed: (parsed.patientBed || '').trim(),
+        patientWard: (parsed.patientWard || '').trim(),
+        patientAge: (parsed.patientAge || '').trim(),
+        patientClCr: (parsed.patientClCr || '').trim(),
       };
 
-      const analysis = buildLocalClinicalAnalysis(extractedItems, patientAllergies, updatedPatientInfo);
+      const analysis = extractedItems.length > 0
+        ? buildLocalClinicalAnalysis(extractedItems, patientAllergies, extractedPatientInfo)
+        : null;
 
       return res.json({
-        patientName: updatedPatientInfo.patientName,
-        patientAge: updatedPatientInfo.patientAge,
-        prescriber: parsed.prescriber || 'Prescritor Identificado na Receita',
+        patientName: extractedPatientInfo.patientName,
+        patientBed: extractedPatientInfo.patientBed,
+        patientWard: extractedPatientInfo.patientWard,
+        patientAge: extractedPatientInfo.patientAge,
+        patientClCr: extractedPatientInfo.patientClCr,
+        prescriber: (parsed.prescriber || '').trim(),
         extractedItems,
         analysis
       });
-    } catch (error: any) {
-      console.warn('Fallback de leitura de foto de prescrição acionado:', error.message);
-      const fallbackItems: PrescriptionItemInput[] = [
-        {
-          id: `photo-${Date.now()}-1`,
-          drugName: 'Amoxicilina + Clavulanato de Potássio',
-          dose: '875mg + 125mg',
-          posology: '1 comprimido via oral de 12 em 12 horas por 7 dias',
-          frequency: '12/12h',
-          schedule: '08:00 - 20:00',
-          route: 'Oral'
-        },
-        {
-          id: `photo-${Date.now()}-2`,
-          drugName: 'Ibuprofeno',
-          dose: '600mg',
-          posology: '1 comprimido via oral de 8 em 8 horas por 5 dias',
-          frequency: '8/8h',
-          schedule: '06:00 - 14:00 - 22:00',
-          route: 'Oral'
-        },
-        {
-          id: `photo-${Date.now()}-3`,
-          drugName: 'Omeprazol',
-          dose: '20mg',
-          posology: '1 cápsula via oral em jejum pela manhã',
-          frequency: '24/24h',
-          schedule: '07:00',
-          route: 'Oral'
+    } catch (geminiError: any) {
+      console.warn('Gemini Vision indisponível para leitura da foto, executando OCR óptico local (Tesseract.js):', geminiError.message);
+
+      try {
+        let ocrText = typeof rawOcrText === 'string' && rawOcrText.trim().length > 0 ? rawOcrText : '';
+        if (!ocrText && cleanBase64) {
+          const imageBuffer = Buffer.from(cleanBase64, 'base64');
+          const result = await Tesseract.recognize(imageBuffer, 'por');
+          ocrText = result?.data?.text || '';
         }
-      ];
 
-      const updatedPatientInfo = {
-        patientName: patientInfo?.patientName || 'Paciente Identificado na Receita (Via Foto)',
-        patientAge: patientInfo?.patientAge || '58',
-        patientClCr: patientInfo?.patientClCr || '55 mL/min',
-      };
+        const parsedOcr = parsePrescriptionFromOcrText(ocrText);
+        const analysis = parsedOcr.extractedItems.length > 0
+          ? buildLocalClinicalAnalysis(parsedOcr.extractedItems, patientAllergies, {
+              patientName: parsedOcr.patientName,
+              patientBed: parsedOcr.patientBed,
+              patientWard: parsedOcr.patientWard,
+              patientAge: parsedOcr.patientAge,
+            })
+          : null;
 
-      const analysis = buildLocalClinicalAnalysis(fallbackItems, patientAllergies, updatedPatientInfo);
-
-      return res.json({
-        patientName: updatedPatientInfo.patientName,
-        patientAge: updatedPatientInfo.patientAge,
-        prescriber: 'CRM Identificado via Leitura Óptica',
-        extractedItems: fallbackItems,
-        analysis
-      });
+        return res.json({
+          patientName: parsedOcr.patientName,
+          patientBed: parsedOcr.patientBed,
+          patientWard: parsedOcr.patientWard,
+          patientAge: parsedOcr.patientAge,
+          patientClCr: '',
+          prescriber: parsedOcr.prescriber,
+          rawOcrText: ocrText,
+          extractedItems: parsedOcr.extractedItems,
+          analysis
+        });
+      } catch (ocrError: any) {
+        console.error('Erro no OCR local:', ocrError);
+        return res.status(500).json({
+          error: 'Não foi possível ler a imagem da prescrição. Verifique se a foto está nítida e bem iluminada.'
+        });
+      }
     }
   });
 
@@ -631,7 +873,7 @@ Como um Farmacêutico Regulatório e Especialista na base de dados da ANVISA (Br
 Retorne estritamente um objeto JSON com os seguintes campos:
 1. "name": "Princípio ativo e dosagem padrão"
 2. "brandNames": Array de strings com nomes comerciais populares no Brasil (ex: ["Marca A", "Marca B"])
-3. "category": "Referência" | "Genérico" | "Similar" | "Outros"
+3. "category": "Referência" | "Genérico" | "Similar"
 4. "tarja": "Preta" | "Vermelha (Retém Receita)" | "Vermelha" | "Livre"
 5. "therapeuticClass": "Classe terapêutica oficial"
 6. "indication": "Principais indicações terapêuticas aprovadas na ANVISA"
@@ -646,17 +888,10 @@ Retorne estritamente um objeto JSON com os seguintes campos:
 Responda APENAS com o objeto JSON válido, sem markdown adicional.
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          systemInstruction: 'Você é um especialista em regulação de medicamentos da ANVISA que retorna dados estritamente em JSON.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
-
-      const textOutput = response.text || '{}';
+      const textOutput = await generateWithModelFallback(
+        prompt,
+        'Você é um especialista em regulação de medicamentos da ANVISA que retorna dados estritamente em JSON.'
+      );
       const cleanedJson = textOutput.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsedData = JSON.parse(cleanedJson);
 
