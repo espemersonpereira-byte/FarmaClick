@@ -1,0 +1,179 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { Header } from './components/Header';
+import { BottomNav } from './components/BottomNav';
+import { SplashScreen } from './components/SplashScreen';
+import { HomeTab } from './components/HomeTab';
+import { MedicationsTab } from './components/MedicationsTab';
+import { InteractionsTab } from './components/InteractionsTab';
+import { InterventionsTab } from './components/InterventionsTab';
+import { ProfileTab } from './components/ProfileTab';
+import {
+  INITIAL_MEDICATIONS,
+  INITIAL_INTERVENTIONS,
+  Medication,
+  InterventionLog,
+  RawAnvisaRecord,
+  enrichAnvisaRecord
+} from './data/medications';
+
+export interface UserProfile {
+  name: string;
+  profession: string;
+  workplace: string;
+  registrationNumber: string;
+  avatarUrl: string;
+}
+
+export default function App() {
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('inicio');
+  const [medications, setMedications] = useState<Medication[]>(INITIAL_MEDICATIONS);
+  const [isCatalogLoaded, setIsCatalogLoaded] = useState<boolean>(false);
+  const [interventions, setInterventions] = useState<InterventionLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('farmaclick_interventions');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.error(e);
+    }
+    return INITIAL_INTERVENTIONS;
+  });
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('farmaclick_user');
+    if (savedUser) {
+      try {
+        setUserProfile(JSON.parse(savedUser));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, []);
+
+  // Load the complete active ANVISA database (8,619 unique products / 85,497 active presentations from dados.anvisa.gov.br)
+  useEffect(() => {
+    let mounted = true;
+    async function loadOfficialAnvisaCatalog() {
+      try {
+        const res = await fetch('/anvisa-catalog.json');
+        if (!res.ok) return;
+        const rawList: RawAnvisaRecord[] = await res.json();
+        if (!mounted || !Array.isArray(rawList)) return;
+
+        const existingNames = new Set(INITIAL_MEDICATIONS.map(m => m.name.toUpperCase().trim()));
+        const enriched: Medication[] = [];
+        for (let i = 0; i < rawList.length; i++) {
+          const item = rawList[i];
+          const upper = (item.n || '').toUpperCase().trim();
+          if (upper && !existingNames.has(upper)) {
+            enriched.push(enrichAnvisaRecord(item, i));
+          }
+        }
+        setMedications([...INITIAL_MEDICATIONS, ...enriched]);
+        setIsCatalogLoaded(true);
+      } catch (err) {
+        console.error('Erro ao carregar catálogo ANVISA completo:', err);
+      }
+    }
+    loadOfficialAnvisaCatalog();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('farmaclick_interventions', JSON.stringify(interventions));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [interventions]);
+
+  const handleUpdateProfile = (profile: UserProfile) => {
+    setUserProfile(profile);
+    localStorage.setItem('farmaclick_user', JSON.stringify(profile));
+  };
+
+  const handleAddIntervention = (log: InterventionLog) => {
+    setInterventions(prev => [log, ...prev]);
+  };
+
+  const handleDeleteIntervention = (id: string) => {
+    setInterventions(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleUpdateInterventionStatus = (id: string, newStatus: 'Aceita' | 'Pendente' | 'Rejeitada') => {
+    setInterventions(prev => prev.map(item => item.id === id ? { ...item, status: newStatus } : item));
+  };
+
+  const handleAddMedication = (newMed: Medication) => {
+    setMedications(prev => [newMed, ...prev]);
+  };
+
+  if (!userProfile) {
+    return <SplashScreen onComplete={handleUpdateProfile} />;
+  }
+
+  const pendingCount = interventions.filter(i => i.status === 'Pendente').length;
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-sky-500 selection:text-white pb-24">
+      <Header
+        userProfile={userProfile}
+        onUpdateProfile={handleUpdateProfile}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+      />
+
+      <main className="mx-auto max-w-7xl px-4 py-6">
+        {activeTab === 'inicio' && (
+          <HomeTab
+            setActiveTab={setActiveTab}
+            medications={medications}
+            interventions={interventions}
+            userProfile={userProfile}
+          />
+        )}
+        {activeTab === 'medicamentos' && (
+          <MedicationsTab
+            medications={medications}
+            onAddMedication={handleAddMedication}
+            isCatalogLoaded={isCatalogLoaded}
+          />
+        )}
+        {activeTab === 'interacoes' && (
+          <InteractionsTab
+            medications={medications}
+            onSaveIntervention={handleAddIntervention}
+          />
+        )}
+        {activeTab === 'intervencoes' && (
+          <InterventionsTab
+            interventions={interventions}
+            onAddIntervention={handleAddIntervention}
+            onDeleteIntervention={handleDeleteIntervention}
+            onUpdateStatus={handleUpdateInterventionStatus}
+            userProfile={userProfile}
+          />
+        )}
+        {activeTab === 'perfil' && (
+          <ProfileTab
+            userProfile={userProfile}
+            onUpdateProfile={handleUpdateProfile}
+          />
+        )}
+      </main>
+
+      <BottomNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        pendingInterventionsCount={pendingCount}
+      />
+    </div>
+  );
+}
