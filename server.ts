@@ -916,6 +916,189 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
     }
   });
 
+  // Persistent User Accounts Storage (data/users.json)
+  interface StoredUserAccount {
+    id: string;
+    name: string;
+    email: string;
+    password?: string;
+    profession: string;
+    workplace: string;
+    registrationNumber: string;
+    avatarUrl: string;
+    updatedAt: string;
+  }
+
+  const usersDataDir = path.resolve(__dirname, 'data');
+  const usersFilePath = path.resolve(usersDataDir, 'users.json');
+
+  function readStoredUsers(): StoredUserAccount[] {
+    try {
+      if (!fs.existsSync(usersFilePath)) {
+        return [];
+      }
+      const raw = fs.readFileSync(usersFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.warn('Erro ao ler data/users.json:', e);
+      return [];
+    }
+  }
+
+  function writeStoredUsers(users: StoredUserAccount[]): void {
+    try {
+      if (!fs.existsSync(usersDataDir)) {
+        fs.mkdirSync(usersDataDir, { recursive: true });
+      }
+      fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Erro ao salvar data/users.json:', e);
+    }
+  }
+
+  app.get('/api/auth/accounts', (_req, res) => {
+    const users = readStoredUsers();
+    const safeList = users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      profession: u.profession,
+      workplace: u.workplace,
+      registrationNumber: u.registrationNumber,
+      avatarUrl: u.avatarUrl,
+      hasPassword: Boolean(u.password && u.password.length > 0),
+    }));
+    res.json({ accounts: safeList });
+  });
+
+  app.post('/api/auth/register', (req, res) => {
+    const { id, name, email, password, profession, workplace, registrationNumber, avatarUrl } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'O nome completo é obrigatório.' });
+    }
+
+    const cleanName = String(name).trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const users = readStoredUsers();
+
+    const existingIndex = users.findIndex(
+      (u) =>
+        (id && u.id === id) ||
+        (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
+        u.name.toLowerCase() === cleanName.toLowerCase()
+    );
+
+    const existing = existingIndex >= 0 ? users[existingIndex] : null;
+    const account: StoredUserAccount = {
+      id: existing?.id || id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: cleanName,
+      email: cleanEmail || existing?.email || '',
+      password: password !== undefined && String(password).length > 0 ? String(password) : existing?.password || '',
+      profession: String(profession || existing?.profession || '').trim(),
+      workplace: String(workplace || existing?.workplace || '').trim(),
+      registrationNumber: String(registrationNumber !== undefined ? registrationNumber : existing?.registrationNumber || '').trim(),
+      avatarUrl: String(avatarUrl !== undefined ? avatarUrl : existing?.avatarUrl || ''),
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existingIndex >= 0) {
+      users[existingIndex] = account;
+    } else {
+      users.unshift(account);
+    }
+    writeStoredUsers(users);
+
+    return res.json({
+      user: {
+        id: account.id,
+        name: account.name,
+        email: account.email,
+        profession: account.profession,
+        workplace: account.workplace,
+        registrationNumber: account.registrationNumber,
+        avatarUrl: account.avatarUrl,
+      },
+    });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    const { identifier, password } = req.body || {};
+    const cleanId = String(identifier || '').trim().toLowerCase();
+    if (!cleanId) {
+      return res.status(400).json({ error: 'Informe seu e-mail, usuário ou nome completo para entrar.' });
+    }
+
+    const users = readStoredUsers();
+    const matched = users.find(
+      (u) =>
+        (u.email && u.email.toLowerCase() === cleanId) ||
+        u.name.toLowerCase() === cleanId ||
+        u.id.toLowerCase() === cleanId
+    );
+
+    if (!matched) {
+      return res.status(404).json({
+        error: 'Conta não encontrada. Verifique o e-mail/nome digitado ou clique em "Criar Conta".',
+      });
+    }
+
+    if (matched.password && matched.password.length > 0) {
+      if (!password || String(password) !== matched.password) {
+        return res.status(401).json({
+          error: 'Senha incorreta para esta conta. Tente novamente ou redefina sua senha.',
+        });
+      }
+    }
+
+    return res.json({
+      user: {
+        id: matched.id,
+        name: matched.name,
+        email: matched.email,
+        profession: matched.profession,
+        workplace: matched.workplace,
+        registrationNumber: matched.registrationNumber,
+        avatarUrl: matched.avatarUrl,
+      },
+    });
+  });
+
+  app.post('/api/auth/reset-password', (req, res) => {
+    const { identifier, newPassword } = req.body || {};
+    const cleanId = String(identifier || '').trim().toLowerCase();
+    if (!cleanId || !newPassword || String(newPassword).trim().length < 3) {
+      return res.status(400).json({ error: 'Informe seu e-mail ou nome cadastrado e uma nova senha (mínimo 3 caracteres).' });
+    }
+
+    const users = readStoredUsers();
+    const idx = users.findIndex(
+      (u) =>
+        (u.email && u.email.toLowerCase() === cleanId) ||
+        u.name.toLowerCase() === cleanId
+    );
+
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Nenhuma conta encontrada com esse e-mail ou nome.' });
+    }
+
+    users[idx].password = String(newPassword);
+    users[idx].updatedAt = new Date().toISOString();
+    writeStoredUsers(users);
+
+    return res.json({
+      user: {
+        id: users[idx].id,
+        name: users[idx].name,
+        email: users[idx].email,
+        profession: users[idx].profession,
+        workplace: users[idx].workplace,
+        registrationNumber: users[idx].registrationNumber,
+        avatarUrl: users[idx].avatarUrl,
+      },
+    });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

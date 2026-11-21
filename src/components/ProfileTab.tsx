@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import { User, Camera, Download, Wifi, CheckCircle2, Smartphone } from 'lucide-react';
+import { User, Camera, Download, Wifi, CheckCircle2, Smartphone, LogOut, Mail, Lock } from 'lucide-react';
 import { usePWAInstall } from '../skills/pwa/usePWAInstall';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
+  id?: string;
   name: string;
+  email?: string;
+  password?: string;
   profession: string;
   workplace: string;
   registrationNumber: string;
@@ -14,10 +17,13 @@ interface UserProfile {
 interface ProfileTabProps {
   userProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile) => void;
+  onLogout: () => void;
 }
 
-export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdateProfile }) => {
+export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdateProfile, onLogout }) => {
   const [name, setName] = useState(userProfile.name);
+  const [email, setEmail] = useState(userProfile.email || '');
+  const [password, setPassword] = useState(userProfile.password || '');
   const [profession, setProfession] = useState(userProfile.profession || PROFESSION_OPTIONS[0].label);
   const [workplace, setWorkplace] = useState(userProfile.workplace);
   const [registrationNumber, setRegistrationNumber] = useState(userProfile.registrationNumber);
@@ -41,7 +47,10 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     const updated: UserProfile = {
+      ...userProfile,
       name: name.trim(),
+      email: email.trim().toLowerCase(),
+      password: password || userProfile.password || '',
       profession,
       workplace: workplace.trim(),
       registrationNumber: profConfig.hasCouncil ? registrationNumber.trim() : '',
@@ -54,17 +63,28 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
 
   return (
     <div className="space-y-6 pb-20 max-w-2xl mx-auto">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">Perfil do Profissional & Sistema</h1>
-        <p className="text-xs text-slate-500">
-          Gerencie suas informações profissionais utilizadas em consultas, relatórios e intervenções.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Perfil do Profissional & Conta</h1>
+          <p className="text-xs text-slate-500">
+            Gerencie suas credenciais de acesso e informações profissionais utilizadas no FarmaClick.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onLogout}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-50 border border-rose-200 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-100 transition self-start sm:self-auto"
+        >
+          <LogOut className="w-4 h-4" />
+          <span>Sair da Conta</span>
+        </button>
       </div>
 
       {savedSuccess && (
         <div className="flex items-center gap-2 rounded-2xl bg-emerald-50 p-4 text-xs font-bold text-emerald-800 border border-emerald-200">
           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          Perfil atualizado com sucesso!
+          Perfil e dados da conta atualizados com sucesso!
         </div>
       )}
 
@@ -107,6 +127,36 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
               onChange={(e) => setName(e.target.value)}
               className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">E-mail ou Usuário de Login</label>
+              <div className="relative mt-1">
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Ex: nome@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 pl-9 pr-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">Senha de Acesso</label>
+              <div className="relative mt-1">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  placeholder="Definir ou alterar senha"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 pl-9 pr-3 py-2.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                />
+              </div>
+            </div>
           </div>
 
           <div className={profConfig.hasCouncil ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>

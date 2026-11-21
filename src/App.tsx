@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
-import { SplashScreen } from './components/SplashScreen';
+import { SplashScreen, upsertSavedAccountLocal } from './components/SplashScreen';
 import { HomeTab } from './components/HomeTab';
 import { MedicationsTab } from './components/MedicationsTab';
 import { InteractionsTab } from './components/InteractionsTab';
@@ -22,7 +22,10 @@ import {
 } from './data/medications';
 
 export interface UserProfile {
+  id?: string;
   name: string;
+  email?: string;
+  password?: string;
   profession: string;
   workplace: string;
   registrationNumber: string;
@@ -48,7 +51,12 @@ export default function App() {
     const savedUser = localStorage.getItem('farmaclick_user');
     if (savedUser) {
       try {
-        setUserProfile(JSON.parse(savedUser));
+        const parsed: UserProfile = JSON.parse(savedUser);
+        setUserProfile(parsed);
+        // Ensure existing logged-in user is also stored in saved accounts so they can log back in after logging out
+        if (parsed && parsed.name) {
+          upsertSavedAccountLocal(parsed);
+        }
       } catch (e) {
         console.error(e);
       }
@@ -95,8 +103,27 @@ export default function App() {
   }, [interventions]);
 
   const handleUpdateProfile = (profile: UserProfile) => {
-    setUserProfile(profile);
-    localStorage.setItem('farmaclick_user', JSON.stringify(profile));
+    const merged: UserProfile = {
+      ...userProfile,
+      ...profile,
+    };
+    setUserProfile(merged);
+    localStorage.setItem('farmaclick_user', JSON.stringify(merged));
+    upsertSavedAccountLocal(merged);
+    fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(merged),
+    }).catch(() => {});
+  };
+
+  const handleLogout = () => {
+    if (userProfile && userProfile.name) {
+      upsertSavedAccountLocal(userProfile);
+    }
+    localStorage.removeItem('farmaclick_user');
+    setUserProfile(null);
+    setActiveTab('inicio');
   };
 
   const handleAddIntervention = (log: InterventionLog) => {
@@ -126,6 +153,7 @@ export default function App() {
       <Header
         userProfile={userProfile}
         onUpdateProfile={handleUpdateProfile}
+        onLogout={handleLogout}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
       />
@@ -165,6 +193,7 @@ export default function App() {
           <ProfileTab
             userProfile={userProfile}
             onUpdateProfile={handleUpdateProfile}
+            onLogout={handleLogout}
           />
         )}
       </main>

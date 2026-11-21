@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText } from 'lucide-react';
+import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
+  id?: string;
   name: string;
+  email?: string;
+  password?: string;
   profession: string;
   workplace: string;
   registrationNumber: string;
@@ -13,14 +16,14 @@ interface UserProfile {
 interface HeaderProps {
   userProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile) => void;
+  onLogout: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, activeTab, setActiveTab }) => {
+export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, onLogout, activeTab, setActiveTab }) => {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // Form state for profile editing
@@ -47,6 +50,7 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateProfile({
+      ...userProfile,
       name: editName.trim(),
       profession: editProfession,
       workplace: editWorkplace.trim(),
@@ -131,7 +135,6 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
             <button
               onClick={() => {
                 setShowMenuDropdown(!showMenuDropdown);
-                setConfirmReset(false);
               }}
               className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-sky-700 transition"
               title="Menu"
@@ -164,26 +167,15 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, ac
                   <FileText className="w-4 h-4 text-sky-600" /> Registro de Intervenções
                 </button>
                 <div className="my-1 border-t border-slate-100"></div>
-                {!confirmReset ? (
-                  <button
-                    onClick={() => setConfirmReset(true)}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 transition"
-                  >
-                    Sair / Redefinir Perfil
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setShowMenuDropdown(false);
-                      setConfirmReset(false);
-                      localStorage.removeItem('farmaclick_user');
-                      window.location.reload();
-                    }}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition"
-                  >
-                    Confirmar Redefinição
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    setShowMenuDropdown(false);
+                    onLogout();
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 transition"
+                >
+                  <LogOut className="w-4 h-4 text-rose-600" /> Sair da Conta
+                </button>
               </div>
             )}
           </div>
