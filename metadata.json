@@ -2,5 +2,7 @@
   "name": "FarmaClick",
   "description": "Farmácia hospitalar e clínica: busca de medicamentos ANVISA, interações medicamentosas, prescrições e histórico de alergias.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

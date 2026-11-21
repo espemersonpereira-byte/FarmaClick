@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
+process.env.DISABLE_HMR = 'true';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
