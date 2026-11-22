@@ -21,6 +21,7 @@ import {
   Download
 } from 'lucide-react';
 import { exportPrescriptionToPDF, exportAllPrescriptionsToPDF } from '../utils/pdfExport';
+import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
 export interface SavedPrescriptionItem {
   id: string;
@@ -65,6 +66,9 @@ export const PrescriptionsTab: React.FC<PrescriptionsTabProps> = ({
   const [filterType, setFilterType] = useState<'todas' | 'seguras' | 'alertas' | 'com_foto'>('todas');
   const [selectedPrescription, setSelectedPrescription] = useState<SavedPrescription | null>(null);
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
+
+  useSwipeBackInterceptor(Boolean(selectedPrescription) && !zoomedPhotoUrl, () => setSelectedPrescription(null));
+  useSwipeBackInterceptor(Boolean(zoomedPhotoUrl), () => setZoomedPhotoUrl(null));
 
   const safeText = (val: any): string => {
     if (typeof val === 'string') return val;

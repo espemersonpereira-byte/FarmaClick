@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { SplashScreen, upsertSavedAccountLocal } from './components/SplashScreen';
@@ -13,6 +13,7 @@ import { InteractionsTab } from './components/InteractionsTab';
 import { PrescriptionsTab, SavedPrescription } from './components/PrescriptionsTab';
 import { InterventionsTab } from './components/InterventionsTab';
 import { ProfileTab } from './components/ProfileTab';
+import { SwipeBackContainer, triggerActiveBackInterceptor } from './components/SwipeBackContainer';
 import {
   readPrescriptionsSyncFromLocal,
   loadAllSavedPrescriptions,
@@ -39,9 +40,19 @@ export interface UserProfile {
   avatarUrl: string;
 }
 
+const TAB_LABELS: Record<string, string> = {
+  inicio: 'Início',
+  medicamentos: 'Medicamentos',
+  interacoes: 'Interações',
+  receitas: 'Receitas',
+  intervencoes: 'Intervenções',
+  perfil: 'Perfil',
+};
+
 export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('inicio');
+  const [activeTab, setActiveTabState] = useState<string>('inicio');
+  const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [medications, setMedications] = useState<Medication[]>(INITIAL_MEDICATIONS);
   const [isCatalogLoaded, setIsCatalogLoaded] = useState<boolean>(false);
   const [interventions, setInterventions] = useState<InterventionLog[]>(() => {
@@ -60,6 +71,54 @@ export default function App() {
 
   const [prescriptionToLoadInInteractions, setPrescriptionToLoadInInteractions] =
     useState<SavedPrescription | null>(null);
+
+  const navigateToTab = useCallback(
+    (nextTab: string) => {
+      setActiveTabState((currentTab) => {
+        if (nextTab === currentTab) return currentTab;
+        setTabHistory((prev) => [...prev.slice(-19), currentTab]);
+        try {
+          window.history.pushState({ farmaclickTab: nextTab }, '');
+        } catch {
+          // Ignore in restricted iframe contexts
+        }
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return nextTab;
+      });
+    },
+    []
+  );
+
+  const handleSwipeBack = useCallback(() => {
+    setTabHistory((prev) => {
+      if (prev.length > 0) {
+        const previousTab = prev[prev.length - 1];
+        setActiveTabState(previousTab);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return prev.slice(0, -1);
+      }
+      setActiveTabState((currentTab) => {
+        if (currentTab !== 'inicio') {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return 'inicio';
+        }
+        return currentTab;
+      });
+      return prev;
+    });
+  }, []);
+
+  // Sync browser/hardware back gesture (popstate) with modal interceptors & tab history
+  useEffect(() => {
+    const handlePopState = () => {
+      if (triggerActiveBackInterceptor()) {
+        return;
+      }
+      handleSwipeBack();
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [handleSwipeBack]);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('farmaclick_user');
@@ -150,7 +209,8 @@ export default function App() {
     }
     localStorage.removeItem('farmaclick_user');
     setUserProfile(null);
-    setActiveTab('inicio');
+    setTabHistory([]);
+    setActiveTabState('inicio');
   };
 
   const handleAddIntervention = (log: InterventionLog) => {
@@ -187,7 +247,7 @@ export default function App() {
 
   const handleOpenPrescriptionInInteractions = (prescription: SavedPrescription) => {
     setPrescriptionToLoadInInteractions(prescription);
-    setActiveTab('interacoes');
+    navigateToTab('interacoes');
   };
 
   const handleAddMedication = (newMed: Medication) => {
@@ -199,77 +259,91 @@ export default function App() {
   }
 
   const pendingCount = interventions.filter(i => i.status === 'Pendente').length;
+  const previousTabId =
+    tabHistory.length > 0
+      ? tabHistory[tabHistory.length - 1]
+      : activeTab !== 'inicio'
+        ? 'inicio'
+        : null;
+  const canGoBackScreen = Boolean(previousTabId);
+  const previousScreenLabel = previousTabId ? TAB_LABELS[previousTabId] || 'Tela Anterior' : undefined;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-sky-500 selection:text-white pb-24">
-      <Header
-        userProfile={userProfile}
-        onUpdateProfile={handleUpdateProfile}
-        onLogout={handleLogout}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-      />
+    <SwipeBackContainer
+      canGoBack={canGoBackScreen}
+      previousLabel={previousScreenLabel}
+      onSwipeBack={handleSwipeBack}
+    >
+      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-sky-500 selection:text-white pb-24">
+        <Header
+          userProfile={userProfile}
+          onUpdateProfile={handleUpdateProfile}
+          onLogout={handleLogout}
+          activeTab={activeTab}
+          setActiveTab={navigateToTab}
+        />
 
-      <main className="mx-auto max-w-7xl px-4 py-6">
-        {activeTab === 'inicio' && (
-          <HomeTab
-            setActiveTab={setActiveTab}
-            medications={medications}
-            interventions={interventions}
-            savedPrescriptionsCount={savedPrescriptions.length}
-            userProfile={userProfile}
-          />
-        )}
-        {activeTab === 'medicamentos' && (
-          <MedicationsTab
-            medications={medications}
-            onAddMedication={handleAddMedication}
-            isCatalogLoaded={isCatalogLoaded}
-          />
-        )}
-        {activeTab === 'interacoes' && (
-          <InteractionsTab
-            medications={medications}
-            onSaveIntervention={handleAddIntervention}
-            onSavePrescription={handleSavePrescription}
-            onViewPrescriptions={() => setActiveTab('receitas')}
-            userProfile={userProfile}
-            initialPrescription={prescriptionToLoadInInteractions}
-            onClearInitialPrescription={() => setPrescriptionToLoadInInteractions(null)}
-          />
-        )}
-        {activeTab === 'receitas' && (
-          <PrescriptionsTab
-            prescriptions={savedPrescriptions}
-            onDeletePrescription={handleDeletePrescription}
-            onOpenInInteractions={handleOpenPrescriptionInInteractions}
-            onGoToNewPrescription={() => setActiveTab('interacoes')}
-          />
-        )}
-        {activeTab === 'intervencoes' && (
-          <InterventionsTab
-            interventions={interventions}
-            onAddIntervention={handleAddIntervention}
-            onDeleteIntervention={handleDeleteIntervention}
-            onUpdateStatus={handleUpdateInterventionStatus}
-            userProfile={userProfile}
-          />
-        )}
-        {activeTab === 'perfil' && (
-          <ProfileTab
-            userProfile={userProfile}
-            onUpdateProfile={handleUpdateProfile}
-            onLogout={handleLogout}
-          />
-        )}
-      </main>
+        <main className="mx-auto max-w-7xl px-4 py-6">
+          {activeTab === 'inicio' && (
+            <HomeTab
+              setActiveTab={navigateToTab}
+              medications={medications}
+              interventions={interventions}
+              savedPrescriptionsCount={savedPrescriptions.length}
+              userProfile={userProfile}
+            />
+          )}
+          {activeTab === 'medicamentos' && (
+            <MedicationsTab
+              medications={medications}
+              onAddMedication={handleAddMedication}
+              isCatalogLoaded={isCatalogLoaded}
+            />
+          )}
+          {activeTab === 'interacoes' && (
+            <InteractionsTab
+              medications={medications}
+              onSaveIntervention={handleAddIntervention}
+              onSavePrescription={handleSavePrescription}
+              onViewPrescriptions={() => navigateToTab('receitas')}
+              userProfile={userProfile}
+              initialPrescription={prescriptionToLoadInInteractions}
+              onClearInitialPrescription={() => setPrescriptionToLoadInInteractions(null)}
+            />
+          )}
+          {activeTab === 'receitas' && (
+            <PrescriptionsTab
+              prescriptions={savedPrescriptions}
+              onDeletePrescription={handleDeletePrescription}
+              onOpenInInteractions={handleOpenPrescriptionInInteractions}
+              onGoToNewPrescription={() => navigateToTab('interacoes')}
+            />
+          )}
+          {activeTab === 'intervencoes' && (
+            <InterventionsTab
+              interventions={interventions}
+              onAddIntervention={handleAddIntervention}
+              onDeleteIntervention={handleDeleteIntervention}
+              onUpdateStatus={handleUpdateInterventionStatus}
+              userProfile={userProfile}
+            />
+          )}
+          {activeTab === 'perfil' && (
+            <ProfileTab
+              userProfile={userProfile}
+              onUpdateProfile={handleUpdateProfile}
+              onLogout={handleLogout}
+            />
+          )}
+        </main>
 
-      <BottomNav
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        pendingInterventionsCount={pendingCount}
-        savedPrescriptionsCount={savedPrescriptions.length}
-      />
-    </div>
+        <BottomNav
+          activeTab={activeTab}
+          setActiveTab={navigateToTab}
+          pendingInterventionsCount={pendingCount}
+          savedPrescriptionsCount={savedPrescriptions.length}
+        />
+      </div>
+    </SwipeBackContainer>
   );
 }

@@ -16,9 +16,11 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
-  ChevronRight
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
+import { SwipeBackContainer } from './SwipeBackContainer';
 
 export interface UserProfile {
   id?: string;
@@ -440,22 +442,52 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4 backdrop-blur-md overflow-y-auto">
-      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl text-slate-900 animate-in fade-in zoom-in duration-200 my-auto">
-        {/* Header */}
-        <div className="text-center pb-4 border-b border-slate-100">
-          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
-            <Hospital className="h-6 w-6" />
+    <SwipeBackContainer
+      canGoBack={step === 'auth'}
+      previousLabel={isResettingPassword ? 'Entrar' : 'Tela Inicial'}
+      onSwipeBack={() => {
+        if (isResettingPassword) {
+          setIsResettingPassword(false);
+          setErrorMessage('');
+        } else {
+          setStep('splash');
+          setErrorMessage('');
+        }
+      }}
+    >
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4 backdrop-blur-md overflow-y-auto">
+        <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl text-slate-900 animate-in fade-in zoom-in duration-200 my-auto">
+          {/* Header */}
+          <div className="relative text-center pb-4 border-b border-slate-100">
+            <button
+              type="button"
+              onClick={() => {
+                if (isResettingPassword) {
+                  setIsResettingPassword(false);
+                  setErrorMessage('');
+                } else {
+                  setStep('splash');
+                  setErrorMessage('');
+                }
+              }}
+              className="absolute left-0 top-0 inline-flex items-center gap-1 rounded-xl bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-sky-50 hover:text-sky-700 transition"
+              title="Voltar (ou arraste da borda esquerda para o centro)"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Voltar
+            </button>
+            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
+              <Hospital className="h-6 w-6" />
+            </div>
+            <h2 className="text-xl font-black text-slate-900">
+              {authMode === 'login' ? 'Entrar no FarmaClick' : 'Criar Conta Profissional'}
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {authMode === 'login'
+                ? 'Acesse sua conta cadastrada para continuar suas consultas e análises'
+                : 'Cadastre seus dados para acessar o sistema sempre que precisar'}
+            </p>
           </div>
-          <h2 className="text-xl font-black text-slate-900">
-            {authMode === 'login' ? 'Entrar no FarmaClick' : 'Criar Conta Profissional'}
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            {authMode === 'login'
-              ? 'Acesse sua conta cadastrada para continuar suas consultas e análises'
-              : 'Cadastre seus dados para acessar o sistema sempre que precisar'}
-          </p>
-        </div>
 
         {/* Mode Switcher Tabs: Entrar | Criar Conta */}
         <div className="mt-4 grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1.5">
@@ -834,6 +866,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         )}
       </div>
     </div>
+    </SwipeBackContainer>
   );
 };
 

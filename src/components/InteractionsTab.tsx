@@ -25,6 +25,7 @@ import {
 import { Medication } from '../data/medications';
 import { SavedPrescription } from './PrescriptionsTab';
 import { exportPrescriptionToPDF } from '../utils/pdfExport';
+import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
 interface PrescriptionItem {
   id: string;
@@ -898,6 +899,8 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({
     }
     setShowCameraModal(false);
   };
+
+  useSwipeBackInterceptor(showCameraModal, stopLiveCamera);
 
   const captureFromLiveCamera = () => {
     if (!videoRef.current) return;

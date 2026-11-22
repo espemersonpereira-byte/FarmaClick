@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FileText, Plus, CheckCircle2, Clock, XCircle, Search, Calendar, User, Hospital, Trash2, Download } from 'lucide-react';
 import { InterventionLog } from '../data/medications';
 import { exportInterventionToPDF, exportInterventionsReportToPDF } from '../utils/pdfExport';
+import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
 interface InterventionsTabProps {
   interventions: InterventionLog[];
@@ -21,6 +22,8 @@ export const InterventionsTab: React.FC<InterventionsTabProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
   const [statusMenuOpenId, setStatusMenuOpenId] = useState<string | null>(null);
+
+  useSwipeBackInterceptor(showNewModal, () => setShowNewModal(false));
 
   // New intervention form
   const [patientName, setPatientName] = useState('');

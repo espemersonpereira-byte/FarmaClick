@@ -18,6 +18,7 @@ import {
   Package
 } from 'lucide-react';
 import { Medication } from '../data/medications';
+import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
 interface MedicationsTabProps {
   medications: Medication[];
@@ -39,6 +40,9 @@ export const MedicationsTab: React.FC<MedicationsTabProps> = ({
   const [loadingLookup, setLoadingLookup] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState<number>(48);
+
+  useSwipeBackInterceptor(showFilters && !selectedMed, () => setShowFilters(false));
+  useSwipeBackInterceptor(Boolean(selectedMed), () => setSelectedMed(null));
 
   const hasActiveFilters =
     selectedCategory !== 'todos' || selectedTarja !== 'todas' || selectedSymptom !== 'todos';

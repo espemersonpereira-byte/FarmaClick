@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut, ClipboardList } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
+import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
 interface UserProfile {
   id?: string;
@@ -25,6 +26,8 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, on
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useSwipeBackInterceptor(showProfileModal, () => setShowProfileModal(false));
   
   // Form state for profile editing
   const [editName, setEditName] = useState(userProfile.name);
