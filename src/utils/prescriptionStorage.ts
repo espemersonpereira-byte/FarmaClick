@@ -4,7 +4,8 @@ const LOCAL_STORAGE_KEY = 'farmaclick_prescriptions';
 const DELETED_IDS_KEY = 'farmaclick_deleted_prescription_ids';
 const IDB_NAME = 'farmaclick_clinical_db';
 const IDB_STORE = 'prescriptions';
-const IDB_VERSION = 1;
+const IDB_ACCOUNTS_STORE = 'accounts';
+const IDB_VERSION = 2;
 
 function getDeletedIds(): Set<string> {
   try {
@@ -39,6 +40,9 @@ function openPrescriptionsDB(): Promise<IDBDatabase | null> {
         const db = request.result;
         if (!db.objectStoreNames.contains(IDB_STORE)) {
           db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(IDB_ACCOUNTS_STORE)) {
+          db.createObjectStore(IDB_ACCOUNTS_STORE, { keyPath: 'id' });
         }
       };
       request.onsuccess = () => resolve(request.result);

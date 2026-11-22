@@ -15,6 +15,10 @@ import { InterventionsTab } from './components/InterventionsTab';
 import { ProfileTab } from './components/ProfileTab';
 import { SwipeBackContainer, triggerActiveBackInterceptor } from './components/SwipeBackContainer';
 import {
+  saveActiveSessionLocal,
+  loadAllSavedAccounts
+} from './utils/accountStorage';
+import {
   readPrescriptionsSyncFromLocal,
   loadAllSavedPrescriptions,
   persistNewPrescription,
@@ -126,14 +130,20 @@ export default function App() {
       try {
         const parsed: UserProfile = JSON.parse(savedUser);
         setUserProfile(parsed);
-        // Ensure existing logged-in user is also stored in saved accounts so they can log back in after logging out
+        // Ensure existing logged-in user is stored across LocalStorage, IndexedDB, and Backend
         if (parsed && parsed.name) {
           upsertSavedAccountLocal(parsed);
+          fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(parsed),
+          }).catch(() => {});
         }
       } catch (e) {
         console.error(e);
       }
     }
+    loadAllSavedAccounts().catch(() => {});
   }, []);
 
   // Load saved prescriptions from IndexedDB + Backend + LocalStorage on mount and whenever user logs in
@@ -194,7 +204,7 @@ export default function App() {
       ...profile,
     };
     setUserProfile(merged);
-    localStorage.setItem('farmaclick_user', JSON.stringify(merged));
+    saveActiveSessionLocal(merged);
     upsertSavedAccountLocal(merged);
     fetch('/api/auth/register', {
       method: 'POST',
@@ -206,6 +216,11 @@ export default function App() {
   const handleLogout = () => {
     if (userProfile && userProfile.name) {
       upsertSavedAccountLocal(userProfile);
+      fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userProfile),
+      }).catch(() => {});
     }
     localStorage.removeItem('farmaclick_user');
     setUserProfile(null);

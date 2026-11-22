@@ -957,12 +957,38 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
     }
   }
 
+  function doesStoredUserMatch(u: StoredUserAccount, identifier: string): boolean {
+    const normId = normalizeText(identifier);
+    if (!normId) return false;
+    const normEmail = normalizeText(u.email);
+    const normName = normalizeText(u.name);
+    const normUserId = normalizeText(u.id);
+    const emailPrefix = normEmail.includes('@') ? normEmail.split('@')[0] : '';
+
+    if (normEmail && normEmail === normId) return true;
+    if (emailPrefix && emailPrefix === normId) return true;
+    if (normName && normName === normId) return true;
+    if (normUserId && normUserId === normId) return true;
+
+    if (normId.length >= 3 && normName) {
+      const tokens = normName.split(/\s+/);
+      if (tokens.includes(normId) || normName.includes(normId)) {
+        return true;
+      }
+    }
+    if (normId.length >= 3 && normEmail && normEmail.includes(normId)) {
+      return true;
+    }
+    return false;
+  }
+
   app.get('/api/auth/accounts', (_req, res) => {
     const users = readStoredUsers();
     const safeList = users.map((u) => ({
       id: u.id,
       name: u.name,
       email: u.email,
+      password: u.password || '',
       profession: u.profession,
       workplace: u.workplace,
       registrationNumber: u.registrationNumber,
@@ -970,6 +996,55 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
       hasPassword: Boolean(u.password && u.password.length > 0),
     }));
     res.json({ accounts: safeList });
+  });
+
+  app.post('/api/auth/sync', (req, res) => {
+    const { accounts } = req.body || {};
+    if (!Array.isArray(accounts)) {
+      return res.json({ accounts: readStoredUsers() });
+    }
+    const users = readStoredUsers();
+    for (const incoming of accounts) {
+      if (!incoming || !incoming.name) continue;
+      const cleanName = String(incoming.name).trim();
+      const cleanEmail = String(incoming.email || '').trim().toLowerCase();
+      const existingIdx = users.findIndex(
+        (u) =>
+          (incoming.id && u.id === incoming.id) ||
+          (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) ||
+          normalizeText(u.name) === normalizeText(cleanName)
+      );
+      const existing = existingIdx >= 0 ? users[existingIdx] : null;
+      const merged: StoredUserAccount = {
+        id: existing?.id || incoming.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: cleanName,
+        email: cleanEmail || existing?.email || '',
+        password:
+          incoming.password !== undefined && String(incoming.password).length > 0
+            ? String(incoming.password)
+            : existing?.password || '',
+        profession: String(incoming.profession || existing?.profession || '').trim(),
+        workplace: String(incoming.workplace || existing?.workplace || '').trim(),
+        registrationNumber: String(
+          incoming.registrationNumber !== undefined
+            ? incoming.registrationNumber
+            : existing?.registrationNumber || ''
+        ).trim(),
+        avatarUrl: String(
+          incoming.avatarUrl !== undefined && incoming.avatarUrl !== ''
+            ? incoming.avatarUrl
+            : existing?.avatarUrl || ''
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+      if (existingIdx >= 0) {
+        users[existingIdx] = merged;
+      } else {
+        users.unshift(merged);
+      }
+    }
+    writeStoredUsers(users);
+    return res.json({ accounts: users });
   });
 
   app.post('/api/auth/register', (req, res) => {
@@ -985,8 +1060,8 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
     const existingIndex = users.findIndex(
       (u) =>
         (id && u.id === id) ||
-        (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail) ||
-        u.name.toLowerCase() === cleanName.toLowerCase()
+        (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) ||
+        normalizeText(u.name) === normalizeText(cleanName)
     );
 
     const existing = existingIndex >= 0 ? users[existingIndex] : null;
@@ -1014,6 +1089,7 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
         id: account.id,
         name: account.name,
         email: account.email,
+        password: account.password,
         profession: account.profession,
         workplace: account.workplace,
         registrationNumber: account.registrationNumber,
@@ -1024,29 +1100,26 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
 
   app.post('/api/auth/login', (req, res) => {
     const { identifier, password } = req.body || {};
-    const cleanId = String(identifier || '').trim().toLowerCase();
+    const cleanId = String(identifier || '').trim();
     if (!cleanId) {
       return res.status(400).json({ error: 'Informe seu e-mail, usuário ou nome completo para entrar.' });
     }
 
     const users = readStoredUsers();
-    const matched = users.find(
-      (u) =>
-        (u.email && u.email.toLowerCase() === cleanId) ||
-        u.name.toLowerCase() === cleanId ||
-        u.id.toLowerCase() === cleanId
-    );
+    const matched = users.find((u) => doesStoredUserMatch(u, cleanId));
 
     if (!matched) {
       return res.status(404).json({
-        error: 'Conta não encontrada. Verifique o e-mail/nome digitado ou clique em "Criar Conta".',
+        code: 'ACCOUNT_NOT_FOUND',
+        error: 'Nenhuma conta encontrada com esse e-mail ou nome.',
       });
     }
 
     if (matched.password && matched.password.length > 0) {
       if (!password || String(password) !== matched.password) {
         return res.status(401).json({
-          error: 'Senha incorreta para esta conta. Tente novamente ou redefina sua senha.',
+          code: 'INVALID_PASSWORD',
+          error: 'Senha incorreta para esta conta. Tente novamente ou clique em "Esqueci minha senha".',
         });
       }
     }
@@ -1056,6 +1129,7 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
         id: matched.id,
         name: matched.name,
         email: matched.email,
+        password: matched.password,
         profession: matched.profession,
         workplace: matched.workplace,
         registrationNumber: matched.registrationNumber,
@@ -1066,20 +1140,19 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
 
   app.post('/api/auth/reset-password', (req, res) => {
     const { identifier, newPassword } = req.body || {};
-    const cleanId = String(identifier || '').trim().toLowerCase();
+    const cleanId = String(identifier || '').trim();
     if (!cleanId || !newPassword || String(newPassword).trim().length < 3) {
       return res.status(400).json({ error: 'Informe seu e-mail ou nome cadastrado e uma nova senha (mínimo 3 caracteres).' });
     }
 
     const users = readStoredUsers();
-    const idx = users.findIndex(
-      (u) =>
-        (u.email && u.email.toLowerCase() === cleanId) ||
-        u.name.toLowerCase() === cleanId
-    );
+    const idx = users.findIndex((u) => doesStoredUserMatch(u, cleanId));
 
     if (idx === -1) {
-      return res.status(404).json({ error: 'Nenhuma conta encontrada com esse e-mail ou nome.' });
+      return res.status(404).json({
+        code: 'ACCOUNT_NOT_FOUND',
+        error: 'Nenhuma conta encontrada com esse e-mail ou nome.',
+      });
     }
 
     users[idx].password = String(newPassword);
@@ -1091,6 +1164,7 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
         id: users[idx].id,
         name: users[idx].name,
         email: users[idx].email,
+        password: users[idx].password,
         profession: users[idx].profession,
         workplace: users[idx].workplace,
         registrationNumber: users[idx].registrationNumber,

@@ -21,6 +21,14 @@ import {
 } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 import { SwipeBackContainer } from './SwipeBackContainer';
+import {
+  readAccountsSyncFromLocal,
+  upsertAccountSync,
+  loadAllSavedAccounts,
+  saveActiveSessionLocal,
+  doesAccountMatchIdentifier,
+  compressAvatarImage
+} from '../utils/accountStorage';
 
 export interface UserProfile {
   id?: string;
@@ -38,72 +46,27 @@ interface SplashScreenProps {
   onComplete: (profile: UserProfile) => void;
 }
 
-const ACCOUNTS_STORAGE_KEY = 'farmaclick_accounts';
-
 export function getSavedAccountsLocal(): UserProfile[] {
-  try {
-    const raw = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return readAccountsSyncFromLocal();
 }
 
 export function upsertSavedAccountLocal(profile: UserProfile): UserProfile[] {
-  const list = getSavedAccountsLocal();
-  const cleanEmail = (profile.email || '').trim().toLowerCase();
-  const cleanName = (profile.name || '').trim().toLowerCase();
-
-  const existingIdx = list.findIndex(
-    (u) =>
-      (profile.id && u.id === profile.id) ||
-      (cleanEmail && u.email && u.email.trim().toLowerCase() === cleanEmail) ||
-      (cleanName && u.name.trim().toLowerCase() === cleanName)
-  );
-
-  const existing = existingIdx >= 0 ? list[existingIdx] : null;
-  const merged: UserProfile = {
-    id: profile.id || existing?.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    name: profile.name.trim(),
-    email: cleanEmail || existing?.email || '',
-    password:
-      profile.password !== undefined && profile.password.length > 0
-        ? profile.password
-        : existing?.password || '',
-    profession: profile.profession || existing?.profession || PROFESSION_OPTIONS[0].label,
-    workplace: profile.workplace.trim(),
-    registrationNumber: profile.registrationNumber.trim(),
-    avatarUrl: profile.avatarUrl !== undefined ? profile.avatarUrl : existing?.avatarUrl || '',
-  };
-
-  if (existingIdx >= 0) {
-    list[existingIdx] = merged;
-  } else {
-    list.unshift(merged);
-  }
-
-  try {
-    localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(list));
-  } catch (e) {
-    console.warn('Erro ao salvar contas no localStorage:', e);
-  }
-  return list;
+  return upsertAccountSync(profile);
 }
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const [step, setStep] = useState<'splash' | 'auth'>('splash');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
 
-  // Saved accounts from localStorage + backend
-  const [savedAccounts, setSavedAccounts] = useState<UserProfile[]>([]);
+  // Saved accounts from localStorage + IndexedDB + backend
+  const [savedAccounts, setSavedAccounts] = useState<UserProfile[]>(() => readAccountsSyncFromLocal());
 
   // Login state
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<UserProfile | null>(null);
+  const [showNotFoundQuickCreate, setShowNotFoundQuickCreate] = useState(false);
 
   // Forgot/Reset Password state
   const [isResettingPassword, setIsResettingPassword] = useState(false);
@@ -127,39 +90,24 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const profConfig = getProfessionConfig(profession);
 
   useEffect(() => {
-    const localList = getSavedAccountsLocal();
-    setSavedAccounts(localList);
-
-    fetch('/api/auth/accounts')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data && Array.isArray(data.accounts)) {
-          const combined = [...localList];
-          for (const srvAcc of data.accounts) {
-            const exists = combined.some(
-              (l) =>
-                (srvAcc.id && l.id === srvAcc.id) ||
-                (srvAcc.email && l.email && l.email.toLowerCase() === srvAcc.email.toLowerCase()) ||
-                l.name.toLowerCase() === String(srvAcc.name || '').toLowerCase()
-            );
-            if (!exists && srvAcc.name) {
-              combined.push(srvAcc);
-            }
-          }
-          setSavedAccounts(combined);
-        }
-      })
-      .catch(() => {
-        // Offline fallback uses localList
-      });
-  }, []);
+    let mounted = true;
+    loadAllSavedAccounts().then((loaded) => {
+      if (mounted) {
+        setSavedAccounts(loaded);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [step, authMode]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setAvatarUrl(reader.result as string);
+      reader.onloadend = async () => {
+        const compressed = await compressAvatarImage(reader.result as string);
+        setAvatarUrl(compressed);
       };
       reader.readAsDataURL(file);
     }
@@ -175,23 +123,49 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
 
   const handleSelectSavedAccount = (acc: UserProfile) => {
     setErrorMessage('');
+    setShowNotFoundQuickCreate(false);
     setResetSuccessMessage('');
     setSelectedAccount(acc);
     setLoginIdentifier(acc.email || acc.name);
-    // If the account has no password set (e.g. created before password support), log in immediately
+    // If the account has no password set (or user already has it saved locally without password), log in immediately
     const hasPwd = Boolean((acc.password && acc.password.length > 0) || acc.hasPassword);
     if (!hasPwd) {
-      localStorage.setItem('farmaclick_user', JSON.stringify(acc));
+      saveActiveSessionLocal(acc);
       onComplete(acc);
     }
+  };
+
+  const handleSwitchToQuickCreateFromLogin = () => {
+    const idTrimmed = loginIdentifier.trim();
+    if (idTrimmed.includes('@')) {
+      setEmail(idTrimmed.toLowerCase());
+      if (!name) {
+        const localPart = idTrimmed.split('@')[0].replace(/[._-]+/g, ' ');
+        const formattedName = localPart
+          .split(' ')
+          .filter(Boolean)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' ');
+        setName(formattedName);
+      }
+    } else if (idTrimmed) {
+      setName(idTrimmed);
+    }
+    if (loginPassword) {
+      setPassword(loginPassword);
+    }
+    setErrorMessage('');
+    setShowNotFoundQuickCreate(false);
+    setAuthMode('register');
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setShowNotFoundQuickCreate(false);
     setResetSuccessMessage('');
 
-    const cleanId = loginIdentifier.trim().toLowerCase();
+    const cleanId = loginIdentifier.trim();
     if (!cleanId) {
       setErrorMessage('Informe seu e-mail, usuário ou nome completo para entrar.');
       return;
@@ -199,13 +173,11 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
 
     setIsLoading(true);
     try {
-      // 1. Check local saved accounts first for instant offline/local capability
-      const localAccounts = getSavedAccountsLocal();
-      const localMatch = localAccounts.find(
-        (u) =>
-          (u.email && u.email.trim().toLowerCase() === cleanId) ||
-          u.name.trim().toLowerCase() === cleanId
-      );
+      // 1. Load all accounts across IndexedDB + LocalStorage + Backend
+      const allKnownAccounts = await loadAllSavedAccounts();
+      setSavedAccounts(allKnownAccounts);
+
+      const localMatch = allKnownAccounts.find((u) => doesAccountMatchIdentifier(u, cleanId));
 
       if (localMatch) {
         if (localMatch.password && localMatch.password.length > 0) {
@@ -214,24 +186,25 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
             const srvRes = await fetch('/api/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ identifier: loginIdentifier.trim(), password: loginPassword }),
+              body: JSON.stringify({ identifier: cleanId, password: loginPassword }),
             }).catch(() => null);
 
             if (srvRes && srvRes.ok) {
               const srvData = await srvRes.json();
               const loggedUser: UserProfile = { ...localMatch, ...srvData.user, password: loginPassword };
               upsertSavedAccountLocal(loggedUser);
-              localStorage.setItem('farmaclick_user', JSON.stringify(loggedUser));
+              saveActiveSessionLocal(loggedUser);
               onComplete(loggedUser);
               return;
             }
 
-            setErrorMessage('Senha incorreta. Verifique sua senha ou clique em "Esqueci minha senha".');
+            setErrorMessage('Senha incorreta para esta conta. Verifique sua senha ou clique em "Esqueci minha senha".');
             setIsLoading(false);
             return;
           }
         }
-        localStorage.setItem('farmaclick_user', JSON.stringify(localMatch));
+        upsertSavedAccountLocal(localMatch);
+        saveActiveSessionLocal(localMatch);
         onComplete(localMatch);
         return;
       }
@@ -241,29 +214,39 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          identifier: loginIdentifier.trim(),
+          identifier: cleanId,
           password: loginPassword,
         }),
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setErrorMessage(
-          data.error || 'Conta não encontrada ou senha incorreta. Verifique os dados ou crie sua conta.'
-        );
+        if (res.status === 404 || data?.code === 'ACCOUNT_NOT_FOUND') {
+          setShowNotFoundQuickCreate(true);
+          setErrorMessage(
+            `Nenhuma conta encontrada para "${cleanId}". Toque no botão abaixo para ativar e entrar com "${cleanId}" agora mesmo!`
+          );
+        } else {
+          setErrorMessage(
+            data.error || 'Senha incorreta. Verifique os dados ou clique em "Esqueci minha senha".'
+          );
+        }
         setIsLoading(false);
         return;
       }
 
       const loggedProfile: UserProfile = {
         ...data.user,
-        password: loginPassword,
+        password: loginPassword || data.user?.password || '',
       };
       upsertSavedAccountLocal(loggedProfile);
-      localStorage.setItem('farmaclick_user', JSON.stringify(loggedProfile));
+      saveActiveSessionLocal(loggedProfile);
       onComplete(loggedProfile);
     } catch {
-      setErrorMessage('Não encontramos uma conta com esses dados neste dispositivo. Crie sua conta na aba "Criar Conta".');
+      setShowNotFoundQuickCreate(true);
+      setErrorMessage(
+        `Conta "${cleanId}" ainda não está registrada neste dispositivo. Toque abaixo para criar e acessar agora.`
+      );
     } finally {
       setIsLoading(false);
     }
@@ -272,9 +255,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setShowNotFoundQuickCreate(false);
     setResetSuccessMessage('');
 
-    const cleanId = loginIdentifier.trim().toLowerCase();
+    const cleanId = loginIdentifier.trim();
     if (!cleanId) {
       setErrorMessage('Digite seu e-mail ou nome completo cadastrado.');
       return;
@@ -286,30 +270,27 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
 
     setIsLoading(true);
     try {
-      const localAccounts = getSavedAccountsLocal();
-      const idx = localAccounts.findIndex(
-        (u) =>
-          (u.email && u.email.trim().toLowerCase() === cleanId) ||
-          u.name.trim().toLowerCase() === cleanId
-      );
+      const allAccounts = await loadAllSavedAccounts();
+      const matched = allAccounts.find((u) => doesAccountMatchIdentifier(u, cleanId));
 
-      if (idx >= 0) {
-        localAccounts[idx].password = resetNewPassword;
-        localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(localAccounts));
-        setSavedAccounts(localAccounts);
+      if (matched) {
+        const updatedAcc: UserProfile = { ...matched, password: resetNewPassword };
+        const nextList = upsertSavedAccountLocal(updatedAcc);
+        setSavedAccounts(nextList);
       }
 
       const srvRes = await fetch('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          identifier: loginIdentifier.trim(),
+          identifier: cleanId,
           newPassword: resetNewPassword,
         }),
       }).catch(() => null);
 
-      if (idx === -1 && (!srvRes || !srvRes.ok)) {
-        setErrorMessage('Conta não encontrada com esse e-mail ou nome. Verifique ou crie uma nova conta.');
+      if (!matched && (!srvRes || !srvRes.ok)) {
+        setShowNotFoundQuickCreate(true);
+        setErrorMessage('Conta ainda não cadastrada com esse e-mail ou nome. Toque abaixo para criar sua conta agora.');
         setIsLoading(false);
         return;
       }
@@ -326,6 +307,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setShowNotFoundQuickCreate(false);
 
     if (!name.trim() || !workplace.trim()) {
       setErrorMessage('Preencha seu nome completo e local de trabalho.');
@@ -345,6 +327,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
     }
 
     setIsLoading(true);
+    const compressedAvatar = avatarUrl ? await compressAvatarImage(avatarUrl) : '';
     const newProfile: UserProfile = {
       id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: name.trim(),
@@ -353,7 +336,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       profession,
       workplace: workplace.trim(),
       registrationNumber: profConfig.hasCouncil ? registrationNumber.trim() : '',
-      avatarUrl,
+      avatarUrl: compressedAvatar,
     };
 
     try {
@@ -370,8 +353,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         }
       }
     } finally {
-      upsertSavedAccountLocal(newProfile);
-      localStorage.setItem('farmaclick_user', JSON.stringify(newProfile));
+      const nextList = upsertSavedAccountLocal(newProfile);
+      setSavedAccounts(nextList);
+      saveActiveSessionLocal(newProfile);
       setIsLoading(false);
       onComplete(newProfile);
     }
@@ -526,9 +510,22 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         </div>
 
         {errorMessage && (
-          <div className="mt-4 flex items-start gap-2 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-medium text-rose-700">
-            <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
-            <span>{errorMessage}</span>
+          <div className="mt-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-medium text-rose-700 space-y-2.5">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+            {showNotFoundQuickCreate && (
+              <button
+                type="button"
+                onClick={handleSwitchToQuickCreateFromLogin}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 py-2.5 text-xs font-bold text-white shadow hover:bg-sky-700 transition"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Criar / Ativar Conta com "{loginIdentifier.trim()}" Agora</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
 

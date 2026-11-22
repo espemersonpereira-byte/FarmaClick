@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User, Camera, Download, Wifi, CheckCircle2, Smartphone, LogOut, Mail, Lock } from 'lucide-react';
 import { usePWAInstall } from '../skills/pwa/usePWAInstall';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
+import { compressAvatarImage } from '../utils/accountStorage';
 
 interface UserProfile {
   id?: string;
@@ -37,8 +38,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setAvatarUrl(reader.result as string);
+      reader.onloadend = async () => {
+        const compressed = await compressAvatarImage(reader.result as string);
+        setAvatarUrl(compressed);
       };
       reader.readAsDataURL(file);
     }
