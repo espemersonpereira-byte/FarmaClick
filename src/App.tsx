@@ -10,6 +10,7 @@ import { SplashScreen, upsertSavedAccountLocal } from './components/SplashScreen
 import { HomeTab } from './components/HomeTab';
 import { MedicationsTab } from './components/MedicationsTab';
 import { InteractionsTab } from './components/InteractionsTab';
+import { PrescriptionsTab, SavedPrescription } from './components/PrescriptionsTab';
 import { InterventionsTab } from './components/InterventionsTab';
 import { ProfileTab } from './components/ProfileTab';
 import {
@@ -46,6 +47,22 @@ export default function App() {
     }
     return INITIAL_INTERVENTIONS;
   });
+
+  const [savedPrescriptions, setSavedPrescriptions] = useState<SavedPrescription[]>(() => {
+    try {
+      const saved = localStorage.getItem('farmaclick_prescriptions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [];
+  });
+
+  const [prescriptionToLoadInInteractions, setPrescriptionToLoadInInteractions] =
+    useState<SavedPrescription | null>(null);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('farmaclick_user');
@@ -102,6 +119,14 @@ export default function App() {
     }
   }, [interventions]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('farmaclick_prescriptions', JSON.stringify(savedPrescriptions));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [savedPrescriptions]);
+
   const handleUpdateProfile = (profile: UserProfile) => {
     const merged: UserProfile = {
       ...userProfile,
@@ -138,6 +163,19 @@ export default function App() {
     setInterventions(prev => prev.map(item => item.id === id ? { ...item, status: newStatus } : item));
   };
 
+  const handleSavePrescription = (prescription: SavedPrescription) => {
+    setSavedPrescriptions(prev => [prescription, ...prev]);
+  };
+
+  const handleDeletePrescription = (id: string) => {
+    setSavedPrescriptions(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleOpenPrescriptionInInteractions = (prescription: SavedPrescription) => {
+    setPrescriptionToLoadInInteractions(prescription);
+    setActiveTab('interacoes');
+  };
+
   const handleAddMedication = (newMed: Medication) => {
     setMedications(prev => [newMed, ...prev]);
   };
@@ -164,6 +202,7 @@ export default function App() {
             setActiveTab={setActiveTab}
             medications={medications}
             interventions={interventions}
+            savedPrescriptionsCount={savedPrescriptions.length}
             userProfile={userProfile}
           />
         )}
@@ -178,6 +217,19 @@ export default function App() {
           <InteractionsTab
             medications={medications}
             onSaveIntervention={handleAddIntervention}
+            onSavePrescription={handleSavePrescription}
+            onViewPrescriptions={() => setActiveTab('receitas')}
+            userProfile={userProfile}
+            initialPrescription={prescriptionToLoadInInteractions}
+            onClearInitialPrescription={() => setPrescriptionToLoadInInteractions(null)}
+          />
+        )}
+        {activeTab === 'receitas' && (
+          <PrescriptionsTab
+            prescriptions={savedPrescriptions}
+            onDeletePrescription={handleDeletePrescription}
+            onOpenInInteractions={handleOpenPrescriptionInInteractions}
+            onGoToNewPrescription={() => setActiveTab('interacoes')}
           />
         )}
         {activeTab === 'intervencoes' && (
@@ -202,6 +254,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         pendingInterventionsCount={pendingCount}
+        savedPrescriptionsCount={savedPrescriptions.length}
       />
     </div>
   );

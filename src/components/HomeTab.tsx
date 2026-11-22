@@ -1,16 +1,23 @@
 import React from 'react';
-import { Pill, Sparkles, FileText, User, ShieldCheck, ArrowRight, Search, AlertTriangle, CheckCircle2, Download } from 'lucide-react';
+import { Pill, Sparkles, FileText, User, ShieldCheck, ArrowRight, Search, AlertTriangle, CheckCircle2, Download, ClipboardList } from 'lucide-react';
 import { Medication, InterventionLog } from '../data/medications';
-import { usePWAInstall } from '../skills/pwa/usePWAInstall'; // We can build a neat hook or component
+import { usePWAInstall } from '../skills/pwa/usePWAInstall';
 
 interface HomeTabProps {
   setActiveTab: (tab: string) => void;
   medications: Medication[];
   interventions: InterventionLog[];
+  savedPrescriptionsCount?: number;
   userProfile: { name: string; profession: string; workplace: string };
 }
 
-export const HomeTab: React.FC<HomeTabProps> = ({ setActiveTab, medications, interventions, userProfile }) => {
+export const HomeTab: React.FC<HomeTabProps> = ({
+  setActiveTab,
+  medications,
+  interventions,
+  savedPrescriptionsCount = 0,
+  userProfile
+}) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const { isInstallable, install, isIOS } = usePWAInstall() as any;
 
@@ -106,7 +113,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({ setActiveTab, medications, int
       </div>
 
       {/* Quick Action Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <button
           onClick={() => setActiveTab('medicamentos')}
           className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-sm border border-slate-100 hover:border-sky-300 hover:shadow-md transition text-left group"
@@ -130,6 +137,17 @@ export const HomeTab: React.FC<HomeTabProps> = ({ setActiveTab, medications, int
         </button>
 
         <button
+          onClick={() => setActiveTab('receitas')}
+          className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-sm border border-slate-100 hover:border-sky-300 hover:shadow-md transition text-left group"
+        >
+          <div className="rounded-xl bg-sky-100 p-3 text-sky-700 group-hover:bg-sky-700 group-hover:text-white transition">
+            <ClipboardList className="h-6 w-6" />
+          </div>
+          <span className="mt-3 text-xs font-bold text-slate-800">Receitas</span>
+          <span className="text-[10px] text-slate-400">{savedPrescriptionsCount} salvas</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('intervencoes')}
           className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-sm border border-slate-100 hover:border-emerald-300 hover:shadow-md transition text-left group"
         >
@@ -142,7 +160,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({ setActiveTab, medications, int
 
         <button
           onClick={() => setActiveTab('perfil')}
-          className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-sm border border-slate-100 hover:border-blue-300 hover:shadow-md transition text-left group"
+          className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white shadow-sm border border-slate-100 hover:border-blue-300 hover:shadow-md transition text-left group col-span-2 sm:col-span-1"
         >
           <div className="rounded-xl bg-blue-100 p-3 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition">
             <User className="h-6 w-6" />

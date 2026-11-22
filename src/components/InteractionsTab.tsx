@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Sparkles,
   Plus,
@@ -17,9 +17,14 @@ import {
   X,
   ScanLine,
   Search,
-  ChevronDown
+  ChevronDown,
+  Bookmark,
+  ClipboardList,
+  Download
 } from 'lucide-react';
 import { Medication } from '../data/medications';
+import { SavedPrescription } from './PrescriptionsTab';
+import { exportPrescriptionToPDF } from '../utils/pdfExport';
 
 interface PrescriptionItem {
   id: string;
@@ -34,6 +39,11 @@ interface PrescriptionItem {
 interface InteractionsTabProps {
   medications: Medication[];
   onSaveIntervention: (intervention: any) => void;
+  onSavePrescription: (prescription: SavedPrescription) => void;
+  onViewPrescriptions?: () => void;
+  userProfile?: { name: string; profession: string };
+  initialPrescription?: SavedPrescription | null;
+  onClearInitialPrescription?: () => void;
 }
 
 const ROUTE_PRESETS = [
@@ -361,7 +371,15 @@ const DEFAULT_FALLBACK_DOSES = [
   '10 mL'
 ];
 
-export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, onSaveIntervention }) => {
+export const InteractionsTab: React.FC<InteractionsTabProps> = ({
+  medications,
+  onSaveIntervention,
+  onSavePrescription,
+  onViewPrescriptions,
+  userProfile,
+  initialPrescription,
+  onClearInitialPrescription
+}) => {
   const [patientName, setPatientName] = useState('');
   const [patientBed, setPatientBed] = useState('');
   const [patientWard, setPatientWard] = useState('');
@@ -394,6 +412,26 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
   const [analysisResult, setAnalysisResult] = useState<any | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
+  const [savedToPrescriptionsBanner, setSavedToPrescriptionsBanner] = useState(false);
+
+  useEffect(() => {
+    if (initialPrescription) {
+      setPatientName(initialPrescription.patientName || '');
+      setPatientBed(initialPrescription.patientBed || '');
+      setPatientWard(initialPrescription.patientWard || '');
+      setPatientAge(initialPrescription.patientAge || '');
+      setPatientClCr(initialPrescription.patientClCr || '');
+      setPrescriberName(initialPrescription.prescriberName || '');
+      setAllergies(Array.isArray(initialPrescription.allergies) ? initialPrescription.allergies : []);
+      setPrescriptionItems(Array.isArray(initialPrescription.items) ? initialPrescription.items : []);
+      setPrescriptionPhotoUrl(initialPrescription.photoUrl || null);
+      setAnalysisResult(initialPrescription.analysisResult || null);
+      setSuccessBanner(`Receita de "${initialPrescription.patientName || 'Paciente'}" carregada para visualização ou edição.`);
+      if (onClearInitialPrescription) {
+        onClearInitialPrescription();
+      }
+    }
+  }, [initialPrescription, onClearInitialPrescription]);
 
   // Filter autocomplete suggestions from ANVISA catalog
   const drugSuggestions = useMemo(() => {
@@ -874,6 +912,89 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
     }
   };
 
+  const handleSaveToPrescriptions = () => {
+    let itemsToSave = [...prescriptionItems];
+    if (drugNameInput.trim()) {
+      const autoItem: PrescriptionItem = {
+        id: Date.now().toString(),
+        drugName: drugNameInput.trim(),
+        dose: doseInput.trim() || 'Conforme prescrição',
+        posology: posologyInput.trim() || 'Conforme prescrição médica',
+        frequency: frequencyInput.trim() || 'Conforme prescrição',
+        schedule: scheduleInput.trim() || '08:00',
+        route: routeInput || 'Oral'
+      };
+      itemsToSave = [...itemsToSave, autoItem];
+      setPrescriptionItems(itemsToSave);
+      setDrugNameInput('');
+      setDoseInput('');
+      setPosologyInput('');
+      setFrequencyInput('');
+      setScheduleInput('');
+    }
+
+    if (itemsToSave.length === 0 && !patientName.trim() && !prescriptionPhotoUrl) {
+      setErrorMsg('Adicione pelo menos um medicamento ou envie a foto da receita antes de salvar.');
+      return;
+    }
+
+    const newSavedPrescription: SavedPrescription = {
+      id: 'rec-' + Date.now(),
+      createdAt: new Date().toLocaleString('pt-BR'),
+      patientName: patientName.trim() || 'Paciente não informado',
+      patientBed: patientBed.trim(),
+      patientWard: patientWard.trim(),
+      patientAge: patientAge.trim(),
+      patientClCr: patientClCr.trim(),
+      prescriberName: prescriberName.trim(),
+      allergies: [...allergies],
+      items: itemsToSave,
+      photoUrl: prescriptionPhotoUrl,
+      analysisResult: analysisResult,
+      savedBy: userProfile?.name
+        ? `${userProfile.name} (${userProfile.profession || 'Profissional'})`
+        : 'Profissional de Saúde'
+    };
+
+    onSavePrescription(newSavedPrescription);
+    setErrorMsg(null);
+    setSavedToPrescriptionsBanner(true);
+    setSuccessBanner('Receita / Prescrição salva com sucesso na página "Receitas"!');
+    setTimeout(() => {
+      setSuccessBanner(null);
+      setSavedToPrescriptionsBanner(false);
+    }, 6000);
+  };
+
+  const handleExportCurrentPrescriptionPDF = () => {
+    if (prescriptionItems.length === 0 && !patientName.trim()) {
+      setErrorMsg('Adicione pelo menos um medicamento à prescrição antes de exportar o PDF.');
+      return;
+    }
+
+    const currentSnapshot: SavedPrescription = {
+      id: 'pdf-' + Date.now(),
+      createdAt: new Date().toLocaleString('pt-BR'),
+      patientName: patientName.trim() || 'Paciente não informado',
+      patientBed: patientBed.trim(),
+      patientWard: patientWard.trim(),
+      patientAge: patientAge.trim(),
+      patientClCr: patientClCr.trim(),
+      prescriberName: prescriberName.trim(),
+      allergies: [...allergies],
+      items: [...prescriptionItems],
+      photoUrl: prescriptionPhotoUrl,
+      analysisResult: analysisResult,
+      savedBy: userProfile?.name
+        ? `${userProfile.name} (${userProfile.profession || 'Profissional'})`
+        : 'Profissional de Saúde'
+    };
+
+    exportPrescriptionToPDF(currentSnapshot);
+    setSuccessBanner('Relatório da prescrição analisada exportado em PDF com sucesso!');
+    setTimeout(() => setSuccessBanner(null), 4000);
+  };
+
   const handleRegisterIntervention = () => {
     if (!analysisResult) return;
     const formattedPatient = [
@@ -888,7 +1009,7 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
       timestamp: new Date().toLocaleString('pt-BR'),
       patientName: formattedPatient,
       ward: patientWard || 'Farmácia Clínica',
-      pharmacistName: 'Farmacêutico Clínico',
+      pharmacistName: userProfile?.name || 'Farmacêutico Clínico',
       medications: prescriptionItems.map(i => `${i.drugName} (${i.dose})`),
       interventions: Array.isArray(analysisResult.therapeuticAdjustments)
         ? analysisResult.therapeuticAdjustments.map(safeText)
@@ -897,30 +1018,66 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
       clinicalOutcome: 'Aguardando validação da equipe médica.'
     };
     onSaveIntervention(newLog);
+    setSavedToPrescriptionsBanner(false);
     setSuccessBanner('Intervenção farmacêutica registrada com sucesso! Confira na aba Intervenções.');
     setTimeout(() => setSuccessBanner(null), 4000);
   };
 
   return (
     <div className="space-y-6 pb-20">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-          Análise de Prescrição, Foto de Receita & Interações
-        </h1>
-        <p className="text-xs text-slate-500">
-          Tire uma foto da prescrição médica ou preencha os dados manualmente para identificar paciente, leito, setor, doses, posologia, interações, alergias e retenção ANVISA.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+            Análise de Prescrição, Foto de Receita & Interações
+          </h1>
+          <p className="text-xs text-slate-500">
+            Tire uma foto da prescrição médica ou preencha os dados manualmente para identificar paciente, leito, setor, doses, posologia, interações, alergias e retenção ANVISA.
+          </p>
+        </div>
+
+        {(prescriptionItems.length > 0 || patientName.trim() || prescriptionPhotoUrl) && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={handleSaveToPrescriptions}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-sky-600 px-4 py-2.5 text-xs font-black text-white shadow-md hover:bg-sky-700 transition"
+            >
+              <Bookmark className="w-4 h-4" />
+              <span>Salvar Receita</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportCurrentPrescriptionPDF}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-black text-white shadow-md hover:bg-slate-800 transition"
+            >
+              <Download className="w-4 h-4" />
+              <span>Exportar PDF</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {successBanner && (
-        <div className="flex items-center justify-between rounded-2xl bg-emerald-50 p-4 text-xs font-bold text-emerald-800 border border-emerald-200 shadow-sm animate-in fade-in">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-emerald-50 p-4 text-xs font-bold text-emerald-800 border border-emerald-200 shadow-sm animate-in fade-in">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{successBanner}</span>
           </div>
-          <button onClick={() => setSuccessBanner(null)} className="text-emerald-600 hover:text-emerald-900">
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {savedToPrescriptionsBanner && onViewPrescriptions && (
+              <button
+                type="button"
+                onClick={onViewPrescriptions}
+                className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white shadow hover:bg-emerald-700 transition"
+              >
+                <ClipboardList className="w-3.5 h-3.5" />
+                <span>Ver Página de Receitas</span>
+              </button>
+            )}
+            <button onClick={() => setSuccessBanner(null)} className="text-emerald-600 hover:text-emerald-900">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -1033,13 +1190,23 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
               )}
             </div>
             {prescriptionPhotoUrl && !loadingPhotoOCR && (
-              <button
-                type="button"
-                onClick={() => setPrescriptionPhotoUrl(null)}
-                className="rounded-xl bg-white/15 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-white/25"
-              >
-                Remover Foto
-              </button>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSaveToPrescriptions}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-3.5 py-2 text-xs font-black text-slate-950 shadow hover:bg-emerald-300 transition"
+                >
+                  <Bookmark className="w-3.5 h-3.5" />
+                  <span>Salvar Receita</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrescriptionPhotoUrl(null)}
+                  className="rounded-xl bg-white/15 px-3 py-2 text-[11px] font-semibold text-white hover:bg-white/25"
+                >
+                  Remover Foto
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -1739,24 +1906,35 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
               </button>
             </form>
 
-            <button
-              type="button"
-              onClick={runClinicalAnalysis}
-              disabled={loadingAI}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 py-3.5 text-sm font-black text-white shadow-xl hover:from-amber-600 hover:to-orange-700 transition disabled:opacity-50"
-            >
-              {loadingAI ? (
-                <>
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  <span>Analisando todos os {prescriptionItems.length} medicamentos da prescrição...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-5 h-5" />
-                  <span>Executar Análise de Interações & Alergias ({prescriptionItems.length} itens)</span>
-                </>
-              )}
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={runClinicalAnalysis}
+                disabled={loadingAI}
+                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 py-3.5 px-4 text-xs sm:text-sm font-black text-white shadow-xl hover:from-amber-600 hover:to-orange-700 transition disabled:opacity-50"
+              >
+                {loadingAI ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Analisando ({prescriptionItems.length} itens)...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Executar Análise ({prescriptionItems.length} itens)</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveToPrescriptions}
+                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-sky-700 py-3.5 px-4 text-xs sm:text-sm font-black text-white shadow-xl hover:bg-sky-800 transition"
+              >
+                <Bookmark className="w-4 h-4" />
+                <span>Salvar Receita / Prescrição</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1942,13 +2120,31 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({ medications, o
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleRegisterIntervention}
-                  className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow hover:bg-emerald-700 transition"
-                >
-                  <Send className="w-4 h-4" /> Registrar como Intervenção Farmacêutica
-                </button>
+                <div className="space-y-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveToPrescriptions}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-sky-600 py-3 text-xs font-black text-white shadow-md hover:bg-sky-700 transition"
+                  >
+                    <Bookmark className="w-4 h-4" /> Salvar em Receitas
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExportCurrentPrescriptionPDF}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-900 py-2.5 text-xs font-black text-white shadow hover:bg-slate-800 transition"
+                  >
+                    <Download className="w-4 h-4 text-sky-300" /> Exportar Prescrição Analisada (PDF)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRegisterIntervention}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-100 border border-slate-200 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
+                  >
+                    <Send className="w-3.5 h-3.5 text-emerald-600" /> Registrar como Intervenção Farmacêutica
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="text-center py-10 text-slate-400 space-y-2">

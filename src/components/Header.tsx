@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut } from 'lucide-react';
+import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut, ClipboardList } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 
 interface UserProfile {
@@ -156,6 +156,15 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, on
                   className="w-full flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:text-sky-600 transition"
                 >
                   <User className="w-4 h-4 text-sky-600" /> Meu Perfil / Configurações
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMenuDropdown(false);
+                    setActiveTab('receitas');
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-sky-50 hover:text-sky-600 transition"
+                >
+                  <ClipboardList className="w-4 h-4 text-sky-600" /> Receitas Salvas
                 </button>
                 <button
                   onClick={() => {
