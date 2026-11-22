@@ -792,6 +792,7 @@ export const InteractionsTab: React.FC<InteractionsTabProps> = ({
 
     try {
       const { dataUrl, mimeType } = await normalizeImageDataUrl(rawDataUrl);
+      setPrescriptionPhotoUrl(dataUrl);
 
       const response = await fetch('/api/analyze-prescription-photo', {
         method: 'POST',

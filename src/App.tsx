@@ -14,6 +14,12 @@ import { PrescriptionsTab, SavedPrescription } from './components/PrescriptionsT
 import { InterventionsTab } from './components/InterventionsTab';
 import { ProfileTab } from './components/ProfileTab';
 import {
+  readPrescriptionsSyncFromLocal,
+  loadAllSavedPrescriptions,
+  persistNewPrescription,
+  removeSavedPrescription
+} from './utils/prescriptionStorage';
+import {
   INITIAL_MEDICATIONS,
   INITIAL_INTERVENTIONS,
   Medication,
@@ -48,18 +54,9 @@ export default function App() {
     return INITIAL_INTERVENTIONS;
   });
 
-  const [savedPrescriptions, setSavedPrescriptions] = useState<SavedPrescription[]>(() => {
-    try {
-      const saved = localStorage.getItem('farmaclick_prescriptions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return [];
-  });
+  const [savedPrescriptions, setSavedPrescriptions] = useState<SavedPrescription[]>(() =>
+    readPrescriptionsSyncFromLocal()
+  );
 
   const [prescriptionToLoadInInteractions, setPrescriptionToLoadInInteractions] =
     useState<SavedPrescription | null>(null);
@@ -79,6 +76,19 @@ export default function App() {
       }
     }
   }, []);
+
+  // Load saved prescriptions from IndexedDB + Backend + LocalStorage on mount and whenever user logs in
+  useEffect(() => {
+    let mounted = true;
+    loadAllSavedPrescriptions().then((loaded) => {
+      if (mounted) {
+        setSavedPrescriptions(loaded);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [userProfile?.id, userProfile?.name]);
 
   // Load the complete active ANVISA database (8,619 unique products / 85,497 active presentations from dados.anvisa.gov.br)
   useEffect(() => {
@@ -119,14 +129,6 @@ export default function App() {
     }
   }, [interventions]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('farmaclick_prescriptions', JSON.stringify(savedPrescriptions));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [savedPrescriptions]);
-
   const handleUpdateProfile = (profile: UserProfile) => {
     const merged: UserProfile = {
       ...userProfile,
@@ -164,11 +166,23 @@ export default function App() {
   };
 
   const handleSavePrescription = (prescription: SavedPrescription) => {
-    setSavedPrescriptions(prev => [prescription, ...prev]);
+    setSavedPrescriptions((prev) => {
+      const next = [prescription, ...prev.filter((p) => p.id !== prescription.id)];
+      persistNewPrescription(prescription, prev).catch((err) =>
+        console.error('Erro ao persistir receita:', err)
+      );
+      return next;
+    });
   };
 
   const handleDeletePrescription = (id: string) => {
-    setSavedPrescriptions(prev => prev.filter(item => item.id !== id));
+    setSavedPrescriptions((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      removeSavedPrescription(id, prev).catch((err) =>
+        console.error('Erro ao excluir receita:', err)
+      );
+      return next;
+    });
   };
 
   const handleOpenPrescriptionInInteractions = (prescription: SavedPrescription) => {

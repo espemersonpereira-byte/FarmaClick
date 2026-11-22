@@ -1099,6 +1099,81 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
     });
   });
 
+  // Persistent Saved Prescriptions Storage (data/prescriptions.json)
+  const prescriptionsFilePath = path.resolve(usersDataDir, 'prescriptions.json');
+
+  function readStoredPrescriptions(): any[] {
+    try {
+      if (!fs.existsSync(prescriptionsFilePath)) {
+        return [];
+      }
+      const raw = fs.readFileSync(prescriptionsFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      console.warn('Erro ao ler data/prescriptions.json:', e);
+      return [];
+    }
+  }
+
+  function writeStoredPrescriptions(list: any[]): void {
+    try {
+      if (!fs.existsSync(usersDataDir)) {
+        fs.mkdirSync(usersDataDir, { recursive: true });
+      }
+      fs.writeFileSync(prescriptionsFilePath, JSON.stringify(list, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Erro ao salvar data/prescriptions.json:', e);
+    }
+  }
+
+  app.get('/api/prescriptions', (_req, res) => {
+    const list = readStoredPrescriptions();
+    res.json({ prescriptions: list });
+  });
+
+  app.post('/api/prescriptions', (req, res) => {
+    const { prescription, prescriptions } = req.body || {};
+    const current = readStoredPrescriptions();
+
+    // Support both single prescription upsert and batch sync
+    if (Array.isArray(prescriptions)) {
+      const byId = new Map<string, any>();
+      for (const item of prescriptions) {
+        if (item && item.id) byId.set(item.id, item);
+      }
+      for (const item of current) {
+        if (item && item.id && !byId.has(item.id)) {
+          byId.set(item.id, item);
+        }
+      }
+      const merged = Array.from(byId.values());
+      writeStoredPrescriptions(merged);
+      return res.json({ prescriptions: merged });
+    }
+
+    if (!prescription || !prescription.id) {
+      return res.status(400).json({ error: 'Dados da receita inválidos.' });
+    }
+
+    const existingIdx = current.findIndex((p) => p.id === prescription.id);
+    if (existingIdx >= 0) {
+      current[existingIdx] = prescription;
+    } else {
+      current.unshift(prescription);
+    }
+    writeStoredPrescriptions(current);
+    return res.json({ prescription, prescriptions: current });
+  });
+
+  app.delete('/api/prescriptions/:id', (req, res) => {
+    const { id } = req.params;
+    const current = readStoredPrescriptions();
+    const filtered = current.filter((p) => p.id !== id);
+    writeStoredPrescriptions(filtered);
+    return res.json({ deletedId: id, prescriptions: filtered });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
