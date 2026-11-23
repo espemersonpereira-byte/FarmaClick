@@ -41,7 +41,6 @@ export function doesRecordBelongToUser(
   if (record.ownerId && userId) {
     return record.ownerId === userId;
   }
-  // If record has an ownerEmail or ownerId that does NOT match this user, hide it
   if (record.ownerEmail && (!userEmail || normalizeAuthKey(record.ownerEmail) !== userEmail)) {
     return false;
   }
@@ -49,7 +48,6 @@ export function doesRecordBelongToUser(
     return false;
   }
 
-  // Fallback for legacy records without ownerId/ownerEmail: check savedBy or pharmacistName
   if (record.savedBy && userName) {
     return normalizeAuthKey(record.savedBy).includes(userName);
   }
@@ -103,7 +101,6 @@ export function doesAccountMatchIdentifier(account: UserProfile, identifier: str
   if (normName && normName === normId) return true;
   if (normUserId && normUserId === normId) return true;
 
-  // Match first name or partial name ONLY if identifier does NOT look like an email
   if (!normId.includes('@') && normId.length >= 3 && normName) {
     const nameTokens = normName.split(/\s+/);
     if (nameTokens.includes(normId) || normName.includes(normId)) {
@@ -201,7 +198,7 @@ async function readAccountsFromIndexedDB(): Promise<UserProfile[]> {
   });
 }
 
-async function saveAccountsToIndexedDB(accounts: UserProfile[]): Promise<void> {
+async function replaceAccountsInIndexedDB(accounts: UserProfile[]): Promise<void> {
   const db = await openClinicalDB();
   if (!db) return;
   return new Promise((resolve) => {
@@ -212,6 +209,7 @@ async function saveAccountsToIndexedDB(accounts: UserProfile[]): Promise<void> {
       }
       const tx = db.transaction(IDB_ACCOUNTS_STORE, 'readwrite');
       const store = tx.objectStore(IDB_ACCOUNTS_STORE);
+      store.clear();
       for (const acc of accounts) {
         if (acc && acc.id) {
           store.put(acc);
@@ -251,7 +249,9 @@ export function readAccountsSyncFromLocal(): UserProfile[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     const deleted = getDeletedAccountIds();
-    return Array.isArray(parsed) ? parsed.filter((a) => !isAccountDeleted(a, deleted)) : [];
+    const list = Array.isArray(parsed) ? parsed.filter((a) => !isAccountDeleted(a, deleted)) : [];
+    // Keep only the single account belonging to this device (the most recently used/created on this device)
+    return list.slice(0, 1);
   } catch {
     return [];
   }
@@ -259,7 +259,8 @@ export function readAccountsSyncFromLocal(): UserProfile[] {
 
 export function writeAccountsSafeToLocal(accounts: UserProfile[]): void {
   const deleted = getDeletedAccountIds();
-  const clean = accounts.filter((a) => !isAccountDeleted(a, deleted));
+  // Only store the active device owner's account on this device so other users' accounts never appear here
+  const clean = accounts.filter((a) => !isAccountDeleted(a, deleted)).slice(0, 1);
   try {
     localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(clean));
   } catch {
@@ -270,7 +271,7 @@ export function writeAccountsSafeToLocal(accounts: UserProfile[]): void {
       }));
       localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(light));
     } catch (e2) {
-      console.warn('Quota de localStorage atingida ao salvar contas; mantendo no IndexedDB e servidor:', e2);
+      console.warn('Quota de localStorage atingida ao salvar conta local:', e2);
     }
   }
 }
@@ -302,10 +303,6 @@ export function mergeAccountsLists(...lists: UserProfile[][]): UserProfile[] {
       const cleanEmail = normalizeAuthKey(acc.email);
       const cleanName = normalizeAuthKey(acc.name);
 
-      // Strict matching:
-      // 1. Same unique ID
-      // 2. Or same email (when email is provided)
-      // 3. Or same name ONLY when neither account has a different email
       const existingIdx = result.findIndex((u) => {
         if (acc.id && u.id && u.id === acc.id) return true;
         if (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) return true;
@@ -339,8 +336,11 @@ export function mergeAccountsLists(...lists: UserProfile[][]): UserProfile[] {
   return result;
 }
 
+/**
+ * Saves ONLY this device user's account locally on this phone/browser (LocalStorage + IndexedDB),
+ * so each user's device only remembers their own saved account on the login screen.
+ */
 export function upsertAccountSync(profile: UserProfile): UserProfile[] {
-  // If an account is explicitly upserted/registered, remove its email/id from deleted set if it was previously deleted
   try {
     const deleted = getDeletedAccountIds();
     if (profile.id) deleted.delete(profile.id);
@@ -351,11 +351,36 @@ export function upsertAccountSync(profile: UserProfile): UserProfile[] {
     // ignore
   }
 
+  const deviceAccount: UserProfile = {
+    ...profile,
+    id: profile.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    profession: profile.profession || PROFESSION_OPTIONS[0].label
+  };
+
+  const singleDeviceList = [deviceAccount];
+  writeAccountsSafeToLocal(singleDeviceList);
+  replaceAccountsInIndexedDB(singleDeviceList).catch(() => {});
+  return singleDeviceList;
+}
+
+/**
+ * Removes a saved account card ONLY from this device's quick-login list (without deleting the account on the server).
+ */
+export async function removeSavedAccountFromThisDeviceOnly(profile: UserProfile): Promise<UserProfile[]> {
+  if (profile.id) {
+    await deleteAccountFromIndexedDB(profile.id);
+  }
   const localList = readAccountsSyncFromLocal();
-  const merged = mergeAccountsLists([profile], localList);
-  writeAccountsSafeToLocal(merged);
-  saveAccountsToIndexedDB(merged).catch(() => {});
-  return merged;
+  const cleanEmail = normalizeAuthKey(profile.email);
+  const remaining = localList.filter((u) => {
+    if (profile.id && u.id === profile.id) return false;
+    if (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) return false;
+    if (!cleanEmail && !u.email && normalizeAuthKey(u.name) === normalizeAuthKey(profile.name)) return false;
+    return true;
+  });
+  writeAccountsSafeToLocal(remaining);
+  await replaceAccountsInIndexedDB(remaining);
+  return remaining;
 }
 
 export async function deleteUserAccountCompletely(profile: UserProfile): Promise<UserProfile[]> {
@@ -368,20 +393,10 @@ export async function deleteUserAccountCompletely(profile: UserProfile): Promise
     addDeletedAccountKey(`email:${cleanEmail}`);
   }
 
-  const localList = readAccountsSyncFromLocal();
-  const remaining = localList.filter((u) => {
-    if (profile.id && u.id === profile.id) return false;
-    if (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) return false;
-    if (!cleanEmail && !u.email && normalizeAuthKey(u.name) === normalizeAuthKey(profile.name)) return false;
-    return true;
-  });
-
-  writeAccountsSafeToLocal(remaining);
-
-  // Also remove active session if it belongs to this user
+  writeAccountsSafeToLocal([]);
+  await replaceAccountsInIndexedDB([]);
   localStorage.removeItem(CURRENT_USER_KEY);
 
-  // Delete from backend server
   const targetId = profile.id || 'by-query';
   const params = new URLSearchParams();
   if (profile.email) params.set('email', profile.email);
@@ -391,41 +406,33 @@ export async function deleteUserAccountCompletely(profile: UserProfile): Promise
     method: 'DELETE'
   }).catch(() => {});
 
-  return remaining;
+  return [];
 }
 
+/**
+ * Loads ONLY the account saved on this specific device (LocalStorage + IndexedDB).
+ * Does NOT pull other users' accounts from the shared server into the device's saved accounts list!
+ * Also syncs this device's account to the backend so the user can always log in with email/password.
+ */
 export async function loadAllSavedAccounts(): Promise<UserProfile[]> {
   const localList = readAccountsSyncFromLocal();
   const idbList = await readAccountsFromIndexedDB();
-  const deleted = getDeletedAccountIds();
 
-  let serverList: UserProfile[] = [];
-  try {
-    const res = await fetch('/api/auth/accounts');
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data?.accounts)) {
-        serverList = data.accounts.filter((a: UserProfile) => !isAccountDeleted(a, deleted));
-      }
-    }
-  } catch {
-    // Offline fallback uses IndexedDB + LocalStorage
-  }
+  // Merge only local device stores (never pull all users from /api/auth/accounts)
+  const mergedDeviceOnly = mergeAccountsLists(localList, idbList).slice(0, 1);
 
-  const merged = mergeAccountsLists(idbList, localList, serverList);
-  writeAccountsSafeToLocal(merged);
-  await saveAccountsToIndexedDB(merged);
+  writeAccountsSafeToLocal(mergedDeviceOnly);
+  await replaceAccountsInIndexedDB(mergedDeviceOnly);
 
-  if (merged.length > 0 || deleted.size > 0) {
-    fetch('/api/auth/sync', {
+  // Sync this device's account to the backend in the background so login credentials stay backed up
+  if (mergedDeviceOnly.length > 0) {
+    const myAccount = mergedDeviceOnly[0];
+    fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        accounts: merged,
-        deletedIds: Array.from(deleted)
-      })
+      body: JSON.stringify(myAccount)
     }).catch(() => {});
   }
 
-  return merged;
+  return mergedDeviceOnly;
 }

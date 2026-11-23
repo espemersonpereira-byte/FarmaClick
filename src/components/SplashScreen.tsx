@@ -17,7 +17,8 @@ import {
   AlertCircle,
   KeyRound,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  X
 } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 import { SwipeBackContainer } from './SwipeBackContainer';
@@ -27,7 +28,8 @@ import {
   loadAllSavedAccounts,
   saveActiveSessionLocal,
   doesAccountMatchIdentifier,
-  compressAvatarImage
+  compressAvatarImage,
+  removeSavedAccountFromThisDeviceOnly
 } from '../utils/accountStorage';
 
 export interface UserProfile {
@@ -562,13 +564,13 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         {/* LOGIN VIEW */}
         {authMode === 'login' && (
           <div className="mt-4 space-y-4">
-            {/* Saved accounts quick picker */}
+            {/* Saved account on this device ONLY */}
             {savedAccounts.length > 0 && !isResettingPassword && (
               <div className="space-y-2">
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Contas salvas ({savedAccounts.length}) — toque para selecionar
+                  Sua conta salva neste dispositivo — toque para entrar
                 </label>
-                <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                <div className="space-y-1.5">
                   {savedAccounts.map((acc, idx) => {
                     const isSelected =
                       selectedAccount?.id === acc.id ||
@@ -576,17 +578,19 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                         (loginIdentifier.toLowerCase() === (acc.email || '').toLowerCase() ||
                           loginIdentifier.toLowerCase() === acc.name.toLowerCase()));
                     return (
-                      <button
+                      <div
                         key={acc.id || `${acc.name}-${idx}`}
-                        type="button"
-                        onClick={() => handleSelectSavedAccount(acc)}
-                        className={`w-full flex items-center justify-between gap-2.5 rounded-xl border p-2.5 text-left transition ${
+                        className={`w-full flex items-center justify-between gap-2 rounded-xl border p-2.5 transition ${
                           isSelected
                             ? 'border-sky-500 bg-sky-50/80 ring-1 ring-sky-500'
                             : 'border-slate-200 bg-slate-50/60 hover:bg-sky-50/40 hover:border-sky-300'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectSavedAccount(acc)}
+                          className="flex-1 flex items-center gap-2.5 min-w-0 text-left"
+                        >
                           <div className="h-9 w-9 flex-shrink-0 overflow-hidden rounded-full border border-sky-300 bg-sky-100 flex items-center justify-center text-xs font-bold text-sky-700">
                             {acc.avatarUrl ? (
                               <img src={acc.avatarUrl} alt={acc.name} className="h-full w-full object-cover" />
@@ -594,16 +598,33 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
                               acc.name.charAt(0).toUpperCase()
                             )}
                           </div>
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <p className="text-xs font-bold text-slate-900 truncate">{acc.name}</p>
                             <p className="text-[11px] text-slate-500 truncate">
                               {acc.email ? `${acc.email} • ` : ''}
                               {acc.profession}
                             </p>
                           </div>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-sky-600 flex-shrink-0" />
-                      </button>
+                          <ChevronRight className="w-4 h-4 text-sky-600 flex-shrink-0" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const remaining = await removeSavedAccountFromThisDeviceOnly(acc);
+                            setSavedAccounts(remaining);
+                            if (selectedAccount?.id === acc.id) {
+                              setSelectedAccount(null);
+                              setLoginIdentifier('');
+                            }
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition flex-shrink-0"
+                          title="Remover conta salva deste aparelho"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
