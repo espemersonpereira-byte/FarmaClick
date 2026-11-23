@@ -999,21 +999,30 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
   });
 
   app.post('/api/auth/sync', (req, res) => {
-    const { accounts } = req.body || {};
+    const { accounts, deletedIds } = req.body || {};
+    const deletedSet = new Set(Array.isArray(deletedIds) ? deletedIds : []);
+    let users = readStoredUsers().filter((u) => !deletedSet.has(u.id));
+
     if (!Array.isArray(accounts)) {
-      return res.json({ accounts: readStoredUsers() });
+      writeStoredUsers(users);
+      return res.json({ accounts: users });
     }
-    const users = readStoredUsers();
+
     for (const incoming of accounts) {
       if (!incoming || !incoming.name) continue;
+      if (incoming.id && deletedSet.has(incoming.id)) continue;
+
       const cleanName = String(incoming.name).trim();
       const cleanEmail = String(incoming.email || '').trim().toLowerCase();
-      const existingIdx = users.findIndex(
-        (u) =>
-          (incoming.id && u.id === incoming.id) ||
-          (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) ||
-          normalizeText(u.name) === normalizeText(cleanName)
-      );
+
+      // Match strictly by ID, or by exact email, or by exact name ONLY when neither side has a conflicting email
+      const existingIdx = users.findIndex((u) => {
+        if (incoming.id && u.id === incoming.id) return true;
+        if (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) return true;
+        if (!cleanEmail && !u.email && normalizeText(u.name) === normalizeText(cleanName)) return true;
+        return false;
+      });
+
       const existing = existingIdx >= 0 ? users[existingIdx] : null;
       const merged: StoredUserAccount = {
         id: existing?.id || incoming.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1048,7 +1057,7 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
   });
 
   app.post('/api/auth/register', (req, res) => {
-    const { id, name, email, password, profession, workplace, registrationNumber, avatarUrl } = req.body || {};
+    const { id, name, email, password, profession, workplace, registrationNumber, avatarUrl, isNewRegistration } = req.body || {};
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'O nome completo é obrigatório.' });
     }
@@ -1057,12 +1066,26 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
     const cleanEmail = String(email || '').trim().toLowerCase();
     const users = readStoredUsers();
 
-    const existingIndex = users.findIndex(
-      (u) =>
-        (id && u.id === id) ||
-        (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) ||
-        normalizeText(u.name) === normalizeText(cleanName)
-    );
+    // If this is an explicit new registration, check if email is already registered to another account
+    if (isNewRegistration && cleanEmail) {
+      const emailTaken = users.find(
+        (u) => u.email && normalizeText(u.email) === normalizeText(cleanEmail)
+      );
+      if (emailTaken) {
+        return res.status(409).json({
+          code: 'EMAIL_ALREADY_EXISTS',
+          error: `Já existe uma conta cadastrada com o e-mail "${cleanEmail}". Use a aba "Entrar" para acessá-la ou cadastre outro e-mail.`,
+        });
+      }
+    }
+
+    // Match existing account strictly by ID or by exact email (or name only if neither has email)
+    const existingIndex = users.findIndex((u) => {
+      if (id && u.id === id) return true;
+      if (cleanEmail && u.email && normalizeText(u.email) === normalizeText(cleanEmail)) return true;
+      if (!cleanEmail && !u.email && normalizeText(u.name) === normalizeText(cleanName)) return true;
+      return false;
+    });
 
     const existing = existingIndex >= 0 ? users[existingIndex] : null;
     const account: StoredUserAccount = {
@@ -1096,6 +1119,23 @@ Responda APENAS com o objeto JSON válido, sem markdown adicional.
         avatarUrl: account.avatarUrl,
       },
     });
+  });
+
+  app.delete('/api/auth/accounts/:id', (req, res) => {
+    const { id } = req.params;
+    const emailQuery = String(req.query.email || '').trim().toLowerCase();
+    const nameQuery = String(req.query.name || '').trim().toLowerCase();
+
+    const users = readStoredUsers();
+    const filtered = users.filter((u) => {
+      if (id && u.id === id) return false;
+      if (emailQuery && u.email && u.email.toLowerCase() === emailQuery) return false;
+      if (!emailQuery && nameQuery && u.name.toLowerCase() === nameQuery) return false;
+      return true;
+    });
+
+    writeStoredUsers(filtered);
+    return res.json({ deletedId: id, accounts: filtered });
   });
 
   app.post('/api/auth/login', (req, res) => {

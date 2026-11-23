@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut, ClipboardList } from 'lucide-react';
+import { Pill, MoreVertical, User, ShieldAlert, Sparkles, Wifi, WifiOff, Camera, X, Check, FileText, LogOut, ClipboardList, Trash2, AlertTriangle } from 'lucide-react';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 import { useSwipeBackInterceptor } from './SwipeBackContainer';
 
@@ -18,12 +18,14 @@ interface HeaderProps {
   userProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile) => void;
   onLogout: () => void;
+  onDeleteAccount: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, onLogout, activeTab, setActiveTab }) => {
+export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, onLogout, onDeleteAccount, activeTab, setActiveTab }) => {
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showDeleteConfirmInModal, setShowDeleteConfirmInModal] = useState(false);
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -86,6 +88,7 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, on
               setEditWorkplace(userProfile.workplace);
               setEditReg(userProfile.registrationNumber);
               setEditAvatar(userProfile.avatarUrl);
+              setShowDeleteConfirmInModal(false);
               setShowProfileModal(true);
             }}
             className="group relative flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-white/80 bg-sky-700 shadow transition hover:scale-105"
@@ -184,9 +187,24 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, on
                     setShowMenuDropdown(false);
                     onLogout();
                   }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition"
+                >
+                  <LogOut className="w-4 h-4 text-slate-600" /> Sair da Conta
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMenuDropdown(false);
+                    setEditName(userProfile.name);
+                    setEditProfession(userProfile.profession || PROFESSION_OPTIONS[0].label);
+                    setEditWorkplace(userProfile.workplace);
+                    setEditReg(userProfile.registrationNumber);
+                    setEditAvatar(userProfile.avatarUrl);
+                    setShowDeleteConfirmInModal(true);
+                    setShowProfileModal(true);
+                  }}
                   className="w-full flex items-center gap-2 px-4 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 transition"
                 >
-                  <LogOut className="w-4 h-4 text-rose-600" /> Sair da Conta
+                  <Trash2 className="w-4 h-4 text-rose-600" /> Excluir Minha Conta
                 </button>
               </div>
             )}
@@ -318,6 +336,47 @@ export const Header: React.FC<HeaderProps> = ({ userProfile, onUpdateProfile, on
                 >
                   Salvar Alterações
                 </button>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100">
+                {!showDeleteConfirmInModal ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirmInModal(true)}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-rose-50 border border-rose-200 py-2 text-xs font-bold text-rose-600 hover:bg-rose-100 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Excluir Minha Conta</span>
+                  </button>
+                ) : (
+                  <div className="rounded-xl bg-rose-50 p-3 border border-rose-200 space-y-2.5">
+                    <div className="flex items-start gap-2 text-rose-800">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <p className="text-xs font-semibold">
+                        Confirmar exclusão permanente da conta de <strong>{userProfile.name}</strong>?
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteConfirmInModal(false)}
+                        className="flex-1 rounded-lg bg-white border border-slate-200 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowProfileModal(false);
+                          onDeleteAccount();
+                        }}
+                        className="flex-1 rounded-lg bg-rose-600 py-1.5 text-xs font-bold text-white hover:bg-rose-700"
+                      >
+                        Sim, Excluir
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </form>
           </div>

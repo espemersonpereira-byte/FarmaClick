@@ -745,6 +745,8 @@ export interface InterventionLog {
   interventions: string[];
   status: 'Aceita' | 'Pendente' | 'Rejeitada';
   clinicalOutcome: string;
+  ownerId?: string;
+  ownerEmail?: string;
 }
 
 export const INITIAL_INTERVENTIONS: InterventionLog[] = [

@@ -326,12 +326,23 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       return;
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+    const existingLocal = savedAccounts.find(
+      (u) => u.email && u.email.trim().toLowerCase() === cleanEmail
+    );
+    if (existingLocal) {
+      setErrorMessage(
+        `Já existe uma conta cadastrada com o e-mail "${cleanEmail}" (${existingLocal.name}). Use a aba "Entrar" para acessá-la ou informe outro e-mail.`
+      );
+      return;
+    }
+
     setIsLoading(true);
     const compressedAvatar = avatarUrl ? await compressAvatarImage(avatarUrl) : '';
     const newProfile: UserProfile = {
       id: `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: name.trim(),
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       password: password,
       profession,
       workplace: workplace.trim(),
@@ -343,8 +354,18 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newProfile),
+        body: JSON.stringify({ ...newProfile, isNewRegistration: true }),
       }).catch(() => null);
+
+      if (res && res.status === 409) {
+        const errData = await res.json().catch(() => null);
+        setErrorMessage(
+          errData?.error ||
+            `Já existe uma conta cadastrada com o e-mail "${cleanEmail}". Use a aba "Entrar" para acessá-la.`
+        );
+        setIsLoading(false);
+        return;
+      }
 
       if (res && res.ok) {
         const data = await res.json().catch(() => null);
@@ -352,13 +373,15 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
           newProfile.id = data.user.id;
         }
       }
-    } finally {
-      const nextList = upsertSavedAccountLocal(newProfile);
-      setSavedAccounts(nextList);
-      saveActiveSessionLocal(newProfile);
-      setIsLoading(false);
-      onComplete(newProfile);
+    } catch {
+      // Offline fallback continues with local storage
     }
+
+    const nextList = upsertSavedAccountLocal(newProfile);
+    setSavedAccounts(nextList);
+    saveActiveSessionLocal(newProfile);
+    setIsLoading(false);
+    onComplete(newProfile);
   };
 
   if (step === 'splash') {

@@ -2,6 +2,7 @@ import { UserProfile } from '../components/SplashScreen';
 import { PROFESSION_OPTIONS } from '../data/professions';
 
 const ACCOUNTS_STORAGE_KEY = 'farmaclick_accounts';
+const DELETED_ACCOUNT_IDS_KEY = 'farmaclick_deleted_account_ids';
 const CURRENT_USER_KEY = 'farmaclick_user';
 const IDB_NAME = 'farmaclick_clinical_db';
 const IDB_VERSION = 2;
@@ -14,6 +15,78 @@ export function normalizeAuthKey(value?: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim();
+}
+
+export function getAccountUniqueKey(profile?: UserProfile | null): string {
+  if (!profile) return 'anonymous';
+  const email = normalizeAuthKey(profile.email);
+  if (email) return `email:${email}`;
+  if (profile.id) return `id:${profile.id}`;
+  const name = normalizeAuthKey(profile.name);
+  return `name:${name || 'user'}`;
+}
+
+export function doesRecordBelongToUser(
+  record: { ownerId?: string; ownerEmail?: string; savedBy?: string; pharmacistName?: string },
+  user?: UserProfile | null
+): boolean {
+  if (!user) return false;
+  const userEmail = normalizeAuthKey(user.email);
+  const userId = (user.id || '').trim();
+  const userName = normalizeAuthKey(user.name);
+
+  if (record.ownerEmail && userEmail) {
+    return normalizeAuthKey(record.ownerEmail) === userEmail;
+  }
+  if (record.ownerId && userId) {
+    return record.ownerId === userId;
+  }
+  // If record has an ownerEmail or ownerId that does NOT match this user, hide it
+  if (record.ownerEmail && (!userEmail || normalizeAuthKey(record.ownerEmail) !== userEmail)) {
+    return false;
+  }
+  if (record.ownerId && (!userId || record.ownerId !== userId)) {
+    return false;
+  }
+
+  // Fallback for legacy records without ownerId/ownerEmail: check savedBy or pharmacistName
+  if (record.savedBy && userName) {
+    return normalizeAuthKey(record.savedBy).includes(userName);
+  }
+  if (record.pharmacistName && userName) {
+    return normalizeAuthKey(record.pharmacistName).includes(userName);
+  }
+  return false;
+}
+
+function getDeletedAccountIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_ACCOUNT_IDS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function addDeletedAccountKey(key: string): void {
+  if (!key) return;
+  try {
+    const set = getDeletedAccountIds();
+    set.add(key);
+    localStorage.setItem(DELETED_ACCOUNT_IDS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+}
+
+function isAccountDeleted(acc: UserProfile, deletedSet: Set<string>): boolean {
+  if (!acc) return true;
+  if (acc.id && deletedSet.has(acc.id)) return true;
+  const email = normalizeAuthKey(acc.email);
+  if (email && deletedSet.has(`email:${email}`)) return true;
+  return false;
 }
 
 export function doesAccountMatchIdentifier(account: UserProfile, identifier: string): boolean {
@@ -30,25 +103,15 @@ export function doesAccountMatchIdentifier(account: UserProfile, identifier: str
   if (normName && normName === normId) return true;
   if (normUserId && normUserId === normId) return true;
 
-  // Match first name or partial name if at least 3 chars
-  if (normId.length >= 3 && normName) {
+  // Match first name or partial name ONLY if identifier does NOT look like an email
+  if (!normId.includes('@') && normId.length >= 3 && normName) {
     const nameTokens = normName.split(/\s+/);
     if (nameTokens.includes(normId) || normName.includes(normId)) {
       return true;
     }
   }
-  if (normId.length >= 3 && normEmail && normEmail.includes(normId)) {
-    return true;
-  }
 
   return false;
-}
-
-export function compressAvatarSync(dataUrl: string): string {
-  if (!dataUrl || !dataUrl.startsWith('data:image/') || dataUrl.length < 40000) {
-    return dataUrl;
-  }
-  return dataUrl;
 }
 
 export function compressAvatarImage(dataUrl: string): Promise<string> {
@@ -127,7 +190,9 @@ async function readAccountsFromIndexedDB(): Promise<UserProfile[]> {
       const store = tx.objectStore(IDB_ACCOUNTS_STORE);
       const req = store.getAll();
       req.onsuccess = () => {
-        resolve(Array.isArray(req.result) ? req.result : []);
+        const deleted = getDeletedAccountIds();
+        const list = Array.isArray(req.result) ? req.result : [];
+        resolve(list.filter((a) => !isAccountDeleted(a, deleted)));
       };
       req.onerror = () => resolve([]);
     } catch {
@@ -160,24 +225,46 @@ async function saveAccountsToIndexedDB(accounts: UserProfile[]): Promise<void> {
   });
 }
 
+async function deleteAccountFromIndexedDB(id: string): Promise<void> {
+  const db = await openClinicalDB();
+  if (!db || !id) return;
+  return new Promise((resolve) => {
+    try {
+      if (!db.objectStoreNames.contains(IDB_ACCOUNTS_STORE)) {
+        resolve();
+        return;
+      }
+      const tx = db.transaction(IDB_ACCOUNTS_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_ACCOUNTS_STORE);
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 export function readAccountsSyncFromLocal(): UserProfile[] {
   try {
     const raw = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const deleted = getDeletedAccountIds();
+    return Array.isArray(parsed) ? parsed.filter((a) => !isAccountDeleted(a, deleted)) : [];
   } catch {
     return [];
   }
 }
 
 export function writeAccountsSafeToLocal(accounts: UserProfile[]): void {
+  const deleted = getDeletedAccountIds();
+  const clean = accounts.filter((a) => !isAccountDeleted(a, deleted));
   try {
-    localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+    localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(clean));
   } catch {
-    // QuotaExceededError due to avatar base64: save lightweight version in localStorage while IndexedDB & Backend keep full avatar
     try {
-      const light = accounts.map((a) => ({
+      const light = clean.map((a) => ({
         ...a,
         avatarUrl: a.avatarUrl && a.avatarUrl.length > 25000 ? '' : a.avatarUrl
       }));
@@ -206,20 +293,25 @@ export function saveActiveSessionLocal(profile: UserProfile): void {
 
 export function mergeAccountsLists(...lists: UserProfile[][]): UserProfile[] {
   const result: UserProfile[] = [];
+  const deleted = getDeletedAccountIds();
 
   for (const list of lists) {
     if (!Array.isArray(list)) continue;
     for (const acc of list) {
-      if (!acc || !acc.name) continue;
+      if (!acc || !acc.name || isAccountDeleted(acc, deleted)) continue;
       const cleanEmail = normalizeAuthKey(acc.email);
       const cleanName = normalizeAuthKey(acc.name);
 
-      const existingIdx = result.findIndex(
-        (u) =>
-          (acc.id && u.id && u.id === acc.id) ||
-          (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) ||
-          (cleanName && normalizeAuthKey(u.name) === cleanName)
-      );
+      // Strict matching:
+      // 1. Same unique ID
+      // 2. Or same email (when email is provided)
+      // 3. Or same name ONLY when neither account has a different email
+      const existingIdx = result.findIndex((u) => {
+        if (acc.id && u.id && u.id === acc.id) return true;
+        if (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) return true;
+        if (!cleanEmail && !u.email && cleanName && normalizeAuthKey(u.name) === cleanName) return true;
+        return false;
+      });
 
       if (existingIdx >= 0) {
         const existing = result[existingIdx];
@@ -248,6 +340,17 @@ export function mergeAccountsLists(...lists: UserProfile[][]): UserProfile[] {
 }
 
 export function upsertAccountSync(profile: UserProfile): UserProfile[] {
+  // If an account is explicitly upserted/registered, remove its email/id from deleted set if it was previously deleted
+  try {
+    const deleted = getDeletedAccountIds();
+    if (profile.id) deleted.delete(profile.id);
+    const email = normalizeAuthKey(profile.email);
+    if (email) deleted.delete(`email:${email}`);
+    localStorage.setItem(DELETED_ACCOUNT_IDS_KEY, JSON.stringify(Array.from(deleted)));
+  } catch {
+    // ignore
+  }
+
   const localList = readAccountsSyncFromLocal();
   const merged = mergeAccountsLists([profile], localList);
   writeAccountsSafeToLocal(merged);
@@ -255,9 +358,46 @@ export function upsertAccountSync(profile: UserProfile): UserProfile[] {
   return merged;
 }
 
+export async function deleteUserAccountCompletely(profile: UserProfile): Promise<UserProfile[]> {
+  if (profile.id) {
+    addDeletedAccountKey(profile.id);
+    await deleteAccountFromIndexedDB(profile.id);
+  }
+  const cleanEmail = normalizeAuthKey(profile.email);
+  if (cleanEmail) {
+    addDeletedAccountKey(`email:${cleanEmail}`);
+  }
+
+  const localList = readAccountsSyncFromLocal();
+  const remaining = localList.filter((u) => {
+    if (profile.id && u.id === profile.id) return false;
+    if (cleanEmail && u.email && normalizeAuthKey(u.email) === cleanEmail) return false;
+    if (!cleanEmail && !u.email && normalizeAuthKey(u.name) === normalizeAuthKey(profile.name)) return false;
+    return true;
+  });
+
+  writeAccountsSafeToLocal(remaining);
+
+  // Also remove active session if it belongs to this user
+  localStorage.removeItem(CURRENT_USER_KEY);
+
+  // Delete from backend server
+  const targetId = profile.id || 'by-query';
+  const params = new URLSearchParams();
+  if (profile.email) params.set('email', profile.email);
+  if (profile.name) params.set('name', profile.name);
+
+  fetch(`/api/auth/accounts/${encodeURIComponent(targetId)}?${params.toString()}`, {
+    method: 'DELETE'
+  }).catch(() => {});
+
+  return remaining;
+}
+
 export async function loadAllSavedAccounts(): Promise<UserProfile[]> {
   const localList = readAccountsSyncFromLocal();
   const idbList = await readAccountsFromIndexedDB();
+  const deleted = getDeletedAccountIds();
 
   let serverList: UserProfile[] = [];
   try {
@@ -265,7 +405,7 @@ export async function loadAllSavedAccounts(): Promise<UserProfile[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.accounts)) {
-        serverList = data.accounts;
+        serverList = data.accounts.filter((a: UserProfile) => !isAccountDeleted(a, deleted));
       }
     }
   } catch {
@@ -276,12 +416,14 @@ export async function loadAllSavedAccounts(): Promise<UserProfile[]> {
   writeAccountsSafeToLocal(merged);
   await saveAccountsToIndexedDB(merged);
 
-  // Sync local accounts back to backend so server always knows all accounts created on this device
-  if (merged.length > 0) {
+  if (merged.length > 0 || deleted.size > 0) {
     fetch('/api/auth/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accounts: merged })
+      body: JSON.stringify({
+        accounts: merged,
+        deletedIds: Array.from(deleted)
+      })
     }).catch(() => {});
   }
 

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { SplashScreen, upsertSavedAccountLocal } from './components/SplashScreen';
@@ -16,7 +16,9 @@ import { ProfileTab } from './components/ProfileTab';
 import { SwipeBackContainer, triggerActiveBackInterceptor } from './components/SwipeBackContainer';
 import {
   saveActiveSessionLocal,
-  loadAllSavedAccounts
+  loadAllSavedAccounts,
+  deleteUserAccountCompletely,
+  doesRecordBelongToUser
 } from './utils/accountStorage';
 import {
   readPrescriptionsSyncFromLocal,
@@ -157,7 +159,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, [userProfile?.id, userProfile?.name]);
+  }, [userProfile?.id, userProfile?.email, userProfile?.name]);
 
   // Load the complete active ANVISA database (8,619 unique products / 85,497 active presentations from dados.anvisa.gov.br)
   useEffect(() => {
@@ -198,10 +200,37 @@ export default function App() {
     }
   }, [interventions]);
 
+  // Filter saved prescriptions and interventions strictly for the currently logged-in user account
+  const userPrescriptions = useMemo(() => {
+    if (!userProfile) return [];
+    return savedPrescriptions.filter((p) => doesRecordBelongToUser(p, userProfile));
+  }, [savedPrescriptions, userProfile]);
+
+  const userInterventions = useMemo(() => {
+    if (!userProfile) return [];
+    return interventions.filter((i) => doesRecordBelongToUser(i, userProfile));
+  }, [interventions, userProfile]);
+
+  // Called when a user logs in or registers a brand-new account from SplashScreen (never merges with previous user)
+  const handleLoginOrRegisterComplete = (authenticatedProfile: UserProfile) => {
+    const cleanProfile: UserProfile = {
+      ...authenticatedProfile,
+      id: authenticatedProfile.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    };
+    setUserProfile(cleanProfile);
+    setPrescriptionToLoadInInteractions(null);
+    setTabHistory([]);
+    setActiveTabState('inicio');
+    saveActiveSessionLocal(cleanProfile);
+    upsertSavedAccountLocal(cleanProfile);
+  };
+
+  // Called when the currently logged-in user edits their own profile in ProfileTab or Header
   const handleUpdateProfile = (profile: UserProfile) => {
     const merged: UserProfile = {
       ...userProfile,
       ...profile,
+      id: profile.id || userProfile?.id || `usr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     };
     setUserProfile(merged);
     saveActiveSessionLocal(merged);
@@ -224,12 +253,47 @@ export default function App() {
     }
     localStorage.removeItem('farmaclick_user');
     setUserProfile(null);
+    setPrescriptionToLoadInInteractions(null);
+    setTabHistory([]);
+    setActiveTabState('inicio');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!userProfile) return;
+    const accountToDelete = { ...userProfile };
+
+    // Remove prescriptions belonging to this deleted account
+    const prescriptionsToDelete = savedPrescriptions.filter((p) =>
+      doesRecordBelongToUser(p, accountToDelete)
+    );
+    for (const p of prescriptionsToDelete) {
+      removeSavedPrescription(p.id, savedPrescriptions).catch(() => {});
+    }
+    setSavedPrescriptions((prev) =>
+      prev.filter((p) => !doesRecordBelongToUser(p, accountToDelete))
+    );
+
+    // Remove interventions belonging to this deleted account
+    setInterventions((prev) =>
+      prev.filter((i) => !doesRecordBelongToUser(i, accountToDelete))
+    );
+
+    // Permanently delete account from LocalStorage, IndexedDB, and Server
+    await deleteUserAccountCompletely(accountToDelete);
+
+    setUserProfile(null);
+    setPrescriptionToLoadInInteractions(null);
     setTabHistory([]);
     setActiveTabState('inicio');
   };
 
   const handleAddIntervention = (log: InterventionLog) => {
-    setInterventions(prev => [log, ...prev]);
+    const enrichedLog: InterventionLog = {
+      ...log,
+      ownerId: userProfile?.id,
+      ownerEmail: userProfile?.email,
+    };
+    setInterventions(prev => [enrichedLog, ...prev]);
   };
 
   const handleDeleteIntervention = (id: string) => {
@@ -241,9 +305,14 @@ export default function App() {
   };
 
   const handleSavePrescription = (prescription: SavedPrescription) => {
+    const enrichedPrescription: SavedPrescription = {
+      ...prescription,
+      ownerId: userProfile?.id,
+      ownerEmail: userProfile?.email,
+    };
     setSavedPrescriptions((prev) => {
-      const next = [prescription, ...prev.filter((p) => p.id !== prescription.id)];
-      persistNewPrescription(prescription, prev).catch((err) =>
+      const next = [enrichedPrescription, ...prev.filter((p) => p.id !== enrichedPrescription.id)];
+      persistNewPrescription(enrichedPrescription, prev).catch((err) =>
         console.error('Erro ao persistir receita:', err)
       );
       return next;
@@ -270,10 +339,10 @@ export default function App() {
   };
 
   if (!userProfile) {
-    return <SplashScreen onComplete={handleUpdateProfile} />;
+    return <SplashScreen onComplete={handleLoginOrRegisterComplete} />;
   }
 
-  const pendingCount = interventions.filter(i => i.status === 'Pendente').length;
+  const pendingCount = userInterventions.filter(i => i.status === 'Pendente').length;
   const previousTabId =
     tabHistory.length > 0
       ? tabHistory[tabHistory.length - 1]
@@ -294,6 +363,7 @@ export default function App() {
           userProfile={userProfile}
           onUpdateProfile={handleUpdateProfile}
           onLogout={handleLogout}
+          onDeleteAccount={handleDeleteAccount}
           activeTab={activeTab}
           setActiveTab={navigateToTab}
         />
@@ -303,8 +373,8 @@ export default function App() {
             <HomeTab
               setActiveTab={navigateToTab}
               medications={medications}
-              interventions={interventions}
-              savedPrescriptionsCount={savedPrescriptions.length}
+              interventions={userInterventions}
+              savedPrescriptionsCount={userPrescriptions.length}
               userProfile={userProfile}
             />
           )}
@@ -328,7 +398,7 @@ export default function App() {
           )}
           {activeTab === 'receitas' && (
             <PrescriptionsTab
-              prescriptions={savedPrescriptions}
+              prescriptions={userPrescriptions}
               onDeletePrescription={handleDeletePrescription}
               onOpenInInteractions={handleOpenPrescriptionInInteractions}
               onGoToNewPrescription={() => navigateToTab('interacoes')}
@@ -336,7 +406,7 @@ export default function App() {
           )}
           {activeTab === 'intervencoes' && (
             <InterventionsTab
-              interventions={interventions}
+              interventions={userInterventions}
               onAddIntervention={handleAddIntervention}
               onDeleteIntervention={handleDeleteIntervention}
               onUpdateStatus={handleUpdateInterventionStatus}
@@ -348,6 +418,7 @@ export default function App() {
               userProfile={userProfile}
               onUpdateProfile={handleUpdateProfile}
               onLogout={handleLogout}
+              onDeleteAccount={handleDeleteAccount}
             />
           )}
         </main>
@@ -356,7 +427,7 @@ export default function App() {
           activeTab={activeTab}
           setActiveTab={navigateToTab}
           pendingInterventionsCount={pendingCount}
-          savedPrescriptionsCount={savedPrescriptions.length}
+          savedPrescriptionsCount={userPrescriptions.length}
         />
       </div>
     </SwipeBackContainer>

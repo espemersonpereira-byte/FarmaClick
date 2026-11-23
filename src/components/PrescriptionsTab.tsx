@@ -47,6 +47,8 @@ export interface SavedPrescription {
   photoUrl?: string | null;
   analysisResult?: any | null;
   savedBy?: string;
+  ownerId?: string;
+  ownerEmail?: string;
 }
 
 interface PrescriptionsTabProps {

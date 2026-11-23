@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { User, Camera, Download, Wifi, CheckCircle2, Smartphone, LogOut, Mail, Lock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Camera, Download, Wifi, CheckCircle2, Smartphone, LogOut, Mail, Lock, Trash2, AlertTriangle } from 'lucide-react';
 import { usePWAInstall } from '../skills/pwa/usePWAInstall';
 import { PROFESSION_OPTIONS, getProfessionConfig } from '../data/professions';
 import { compressAvatarImage } from '../utils/accountStorage';
@@ -19,9 +19,15 @@ interface ProfileTabProps {
   userProfile: UserProfile;
   onUpdateProfile: (profile: UserProfile) => void;
   onLogout: () => void;
+  onDeleteAccount: () => void;
 }
 
-export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdateProfile, onLogout }) => {
+export const ProfileTab: React.FC<ProfileTabProps> = ({
+  userProfile,
+  onUpdateProfile,
+  onLogout,
+  onDeleteAccount
+}) => {
   const [name, setName] = useState(userProfile.name);
   const [email, setEmail] = useState(userProfile.email || '');
   const [password, setPassword] = useState(userProfile.password || '');
@@ -30,6 +36,19 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
   const [registrationNumber, setRegistrationNumber] = useState(userProfile.registrationNumber);
   const [avatarUrl, setAvatarUrl] = useState(userProfile.avatarUrl);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Sync form fields if active userProfile changes
+  useEffect(() => {
+    setName(userProfile.name);
+    setEmail(userProfile.email || '');
+    setPassword(userProfile.password || '');
+    setProfession(userProfile.profession || PROFESSION_OPTIONS[0].label);
+    setWorkplace(userProfile.workplace);
+    setRegistrationNumber(userProfile.registrationNumber);
+    setAvatarUrl(userProfile.avatarUrl);
+    setShowDeleteConfirm(false);
+  }, [userProfile]);
 
   const profConfig = getProfessionConfig(profession);
   const { isInstallable, install, isIOS } = usePWAInstall() as any;
@@ -67,7 +86,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
     <div className="space-y-6 pb-20 max-w-2xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Perfil do Profissional & Conta</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Perfil do Profissional & Configurações</h1>
           <p className="text-xs text-slate-500">
             Gerencie suas credenciais de acesso e informações profissionais utilizadas no FarmaClick.
           </p>
@@ -76,7 +95,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
         <button
           type="button"
           onClick={onLogout}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-rose-50 border border-rose-200 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-100 transition self-start sm:self-auto"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 transition self-start sm:self-auto"
         >
           <LogOut className="w-4 h-4" />
           <span>Sair da Conta</span>
@@ -259,6 +278,64 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ userProfile, onUpdatePro
           </span>
         </div>
       </div>
+
+      {/* Danger Zone: Delete Account */}
+      <div className="rounded-3xl bg-rose-50/70 p-6 shadow-sm border border-rose-200 space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-rose-100 p-3 text-rose-600 flex-shrink-0">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-rose-900">Excluir Conta</h2>
+              <p className="text-xs text-rose-700 mt-0.5">
+                Remove permanentemente a conta de <strong>{userProfile.name}</strong> ({userProfile.email || 'sem e-mail'}) deste dispositivo e do servidor.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {!showDeleteConfirm ? (
+          <button
+            type="button"
+            onClick={() => setShowDeleteConfirm(true)}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-600 px-5 py-3 text-xs font-bold text-white shadow hover:bg-rose-700 transition"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>Excluir Minha Conta</span>
+          </button>
+        ) : (
+          <div className="rounded-2xl bg-white p-4 border border-rose-300 space-y-3 animate-in fade-in duration-150">
+            <div className="flex items-start gap-2.5 text-rose-800">
+              <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <p className="font-bold">Tem certeza que deseja excluir sua conta permanentemente?</p>
+                <p className="text-slate-600">
+                  Esta ação removerá o cadastro de <strong>{userProfile.name}</strong> e suas receitas vinculadas. Você poderá criar uma nova conta quando quiser.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 rounded-xl bg-slate-100 py-2.5 px-4 text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={onDeleteAccount}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 py-2.5 px-4 text-xs font-bold text-white shadow hover:bg-rose-700 transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Sim, Excluir Conta Permanentemente</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
+
